@@ -10,7 +10,7 @@ import java.util.UUID;
 
 /**
  * Swiss-system pairing engine (Dutch-style fold pairing).
- *
+
  * Players are ranked by score, then rating. Within a score group the top
  * half is preferably paired against the bottom half (1 vs n/2+1, ...).
  * Rematches are never allowed: pairings are found via backtracking and,
