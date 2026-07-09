@@ -1,0 +1,265 @@
+package com.open.chess.tournament.domain.model;
+
+import com.open.chess.tournament.domain.exception.DomainException;
+import com.open.chess.tournament.domain.exception.NoPairingPossibleException;
+import com.open.chess.tournament.domain.exception.NotFoundException;
+import com.open.chess.tournament.domain.service.PairingCandidate;
+import com.open.chess.tournament.domain.service.PairingPlan;
+import com.open.chess.tournament.domain.service.SwissPairingEngine;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Id;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.OrderBy;
+import jakarta.persistence.Table;
+
+import java.time.Instant;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+@Entity
+@Table(name = "tournaments")
+public class Tournament {
+
+    @Id
+    private UUID id;
+
+    @Column(nullable = false)
+    private String name;
+
+    @Column(name = "total_rounds", nullable = false)
+    private int totalRounds;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private TournamentStatus status;
+
+    @Column(name = "created_at", nullable = false)
+    private Instant createdAt;
+
+    @OneToMany(mappedBy = "tournament", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private List<Player> players = new ArrayList<>();
+
+    @OneToMany(mappedBy = "tournament", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @OrderBy("number")
+    private List<Round> rounds = new ArrayList<>();
+
+    protected Tournament() {
+    }
+
+    private Tournament(String name, int totalRounds) {
+        this.id = UUID.randomUUID();
+        this.name = name;
+        this.totalRounds = totalRounds;
+        this.status = TournamentStatus.REGISTRATION;
+        this.createdAt = Instant.now();
+    }
+
+    public static Tournament create(String name, int totalRounds) {
+        if (totalRounds < 1) {
+            throw new DomainException("A tournament must have at least one round");
+        }
+        return new Tournament(name, totalRounds);
+    }
+
+    public Player registerPlayer(String playerName, int rating) {
+        if (status != TournamentStatus.REGISTRATION) {
+            throw new DomainException("Players can only be registered before the tournament starts");
+        }
+        Player player = new Player(this, playerName, rating);
+        players.add(player);
+        return player;
+    }
+
+    public void start() {
+        if (status != TournamentStatus.REGISTRATION) {
+            throw new DomainException("Tournament has already started");
+        }
+        if (players.size() < 2) {
+            throw new DomainException("At least two players are required to start a tournament");
+        }
+        status = TournamentStatus.IN_PROGRESS;
+    }
+
+    /**
+     * Generates the next round, or finishes the tournament and returns
+     * empty when no rematch-free pairing is possible.
+     */
+    public Optional<Round> generateNextRound(SwissPairingEngine engine) {
+        if (status != TournamentStatus.IN_PROGRESS) {
+            throw new DomainException("Rounds can only be generated while the tournament is in progress");
+        }
+        if (rounds.size() >= totalRounds) {
+            throw new DomainException("All rounds have already been generated");
+        }
+        currentRound().ifPresent(round -> {
+            if (!round.isComplete()) {
+                throw new DomainException("Round " + round.getNumber() + " still has pending results");
+            }
+        });
+
+        PairingPlan plan;
+        try {
+            plan = engine.generate(buildCandidates());
+        } catch (NoPairingPossibleException exception) {
+            status = TournamentStatus.FINISHED;
+            return Optional.empty();
+        }
+        Round round = new Round(this, rounds.size() + 1);
+        int board = 1;
+        for (PairingPlan.Board planned : plan.boards()) {
+            round.addPairing(board++, planned.whitePlayerId(), planned.blackPlayerId());
+        }
+        if (plan.byePlayerId() != null) {
+            round.addPairing(board, plan.byePlayerId(), null);
+        }
+        rounds.add(round);
+        return Optional.of(round);
+    }
+
+    public Pairing reportResult(UUID pairingId, GameResult result) {
+        if (status == TournamentStatus.REGISTRATION) {
+            throw new DomainException("Tournament has not started yet");
+        }
+        if (result == GameResult.PENDING || result == GameResult.BYE) {
+            throw new DomainException("Result must be WHITE_WINS, BLACK_WINS or DRAW");
+        }
+        Round round = currentRound()
+                .orElseThrow(() -> new DomainException("No round has been generated yet"));
+        Pairing pairing = round.getPairings().stream()
+                .filter(p -> p.getId().equals(pairingId))
+                .findFirst()
+                .orElseThrow(() -> new NotFoundException(
+                        "Pairing " + pairingId + " not found in the current round"));
+        if (pairing.isBye()) {
+            throw new DomainException("Cannot report a result for a bye");
+        }
+        pairing.setResult(result);
+        if (rounds.size() == totalRounds && round.isComplete()) {
+            status = TournamentStatus.FINISHED;
+        }
+        return pairing;
+    }
+
+    public double scoreOf(UUID playerId) {
+        return rounds.stream()
+                .flatMap(round -> round.getPairings().stream())
+                .mapToDouble(pairing -> pairing.pointsFor(playerId))
+                .sum();
+    }
+
+    public List<PlayerStanding> standings() {
+        Map<UUID, Double> scores = players.stream()
+                .collect(Collectors.toMap(Player::getId, player -> scoreOf(player.getId())));
+        Map<UUID, Double> buchholz = players.stream()
+                .collect(Collectors.toMap(Player::getId, player -> opponentsOf(player.getId()).stream()
+                        .mapToDouble(scores::get)
+                        .sum()));
+        List<PlayerStanding> standings = players.stream()
+                .sorted(Comparator
+                        .comparingDouble((Player p) -> scores.get(p.getId())).reversed()
+                        .thenComparing(Comparator.comparingDouble((Player p) -> buchholz.get(p.getId())).reversed())
+                        .thenComparing(Comparator.comparingInt(Player::getRating).reversed())
+                        .thenComparing(Player::getName))
+                .map(player -> new PlayerStanding(
+                        0,
+                        player.getId(),
+                        player.getName(),
+                        player.getRating(),
+                        scores.get(player.getId()),
+                        buchholz.get(player.getId()),
+                        player.isActive()))
+                .toList();
+        List<PlayerStanding> ranked = new ArrayList<>(standings.size());
+        for (int i = 0; i < standings.size(); i++) {
+            ranked.add(standings.get(i).withRank(i + 1));
+        }
+        return ranked;
+    }
+
+    private List<UUID> opponentsOf(UUID playerId) {
+        return rounds.stream()
+                .flatMap(round -> round.getPairings().stream())
+                .map(pairing -> pairing.opponentOf(playerId))
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    private List<PairingCandidate> buildCandidates() {
+        Map<UUID, Player> byId = players.stream()
+                .collect(Collectors.toMap(Player::getId, Function.identity()));
+        return players.stream()
+                .filter(Player::isActive)
+                .map(player -> {
+                    UUID playerId = player.getId();
+                    Set<UUID> opponents = new HashSet<>();
+                    int whiteGames = 0;
+                    int blackGames = 0;
+                    boolean hadBye = false;
+                    for (Round round : rounds) {
+                        for (Pairing pairing : round.getPairings()) {
+                            if (!pairing.involves(playerId)) {
+                                continue;
+                            }
+                            if (pairing.isBye()) {
+                                hadBye = true;
+                            } else if (pairing.getWhitePlayerId().equals(playerId)) {
+                                whiteGames++;
+                                opponents.add(pairing.getBlackPlayerId());
+                            } else {
+                                blackGames++;
+                                opponents.add(pairing.getWhitePlayerId());
+                            }
+                        }
+                    }
+                    return new PairingCandidate(playerId, byId.get(playerId).getRating(),
+                            scoreOf(playerId), opponents, whiteGames, blackGames, hadBye);
+                })
+                .toList();
+    }
+
+    public Optional<Round> currentRound() {
+        return rounds.isEmpty() ? Optional.empty() : Optional.of(rounds.getLast());
+    }
+
+    public Optional<Round> roundByNumber(int number) {
+        return rounds.stream().filter(round -> round.getNumber() == number).findFirst();
+    }
+
+    public Optional<Player> playerById(UUID playerId) {
+        return players.stream().filter(player -> player.getId().equals(playerId)).findFirst();
+    }
+
+    public UUID getId() {
+        return id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public int getTotalRounds() {
+        return totalRounds;
+    }
+
+    public TournamentStatus getStatus() {
+        return status;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public List<Player> getPlayers() {
+        return List.copyOf(players);
+    }
+
+    public List<Round> getRounds() {
+        return List.copyOf(rounds);
+    }
+}
