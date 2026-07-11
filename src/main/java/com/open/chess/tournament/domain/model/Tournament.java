@@ -160,10 +160,27 @@ public class Tournament {
                 .collect(Collectors.toMap(Player::getId, player -> opponentsOf(player.getId()).stream()
                         .mapToDouble(scores::get)
                         .sum()));
+        Map<UUID, Double> medianBuchholz = players.stream()
+                .collect(Collectors.toMap(Player::getId,
+                        player -> medianBuchholz(player.getId(), scores)));
+        Map<UUID, Double> sonnebornBerger = players.stream()
+                .collect(Collectors.toMap(Player::getId,
+                        player -> sonnebornBerger(player.getId(), scores)));
+        Map<UUID, Integer> wins = players.stream()
+                .collect(Collectors.toMap(Player::getId, player -> winsOf(player.getId())));
+
         List<PlayerStanding> standings = players.stream()
                 .sorted(Comparator
                         .comparingDouble((Player p) -> scores.get(p.getId())).reversed()
+                        .thenComparing(Comparator.comparingDouble(
+                                (Player p) -> directEncounterScore(p.getId(), scores)).reversed())
                         .thenComparing(Comparator.comparingDouble((Player p) -> buchholz.get(p.getId())).reversed())
+                        .thenComparing(Comparator.comparingDouble(
+                                (Player p) -> medianBuchholz.get(p.getId())).reversed())
+                        .thenComparing(Comparator.comparingDouble(
+                                (Player p) -> sonnebornBerger.get(p.getId())).reversed())
+                        .thenComparing(Comparator.comparingInt(
+                                (Player p) -> wins.get(p.getId())).reversed())
                         .thenComparing(Comparator.comparingInt(Player::getRating).reversed())
                         .thenComparing(Player::getName))
                 .map(player -> new PlayerStanding(
@@ -173,6 +190,9 @@ public class Tournament {
                         player.getRating(),
                         scores.get(player.getId()),
                         buchholz.get(player.getId()),
+                        medianBuchholz.get(player.getId()),
+                        sonnebornBerger.get(player.getId()),
+                        wins.get(player.getId()),
                         player.isActive()))
                 .toList();
         List<PlayerStanding> ranked = new ArrayList<>(standings.size());
@@ -182,12 +202,84 @@ public class Tournament {
         return ranked;
     }
 
+    private int winsOf(UUID playerId) {
+        return (int) rounds.stream()
+                .flatMap(round -> round.getPairings().stream())
+                .filter(p -> p.pointsFor(playerId) == 1.0 && !p.isBye())
+                .count();
+    }
+
+    private double medianBuchholz(UUID playerId, Map<UUID, Double> scores) {
+        List<Double> opponentScores = opponentsOf(playerId).stream()
+                .map(scores::get)
+                .sorted()
+                .toList();
+        if (opponentScores.isEmpty()) {
+            return 0.0;
+        }
+        if (opponentScores.size() <= 2) {
+            return opponentScores.stream().mapToDouble(Double::doubleValue).sum();
+        }
+        return opponentScores.stream()
+                .skip(1)
+                .limit(opponentScores.size() - 2L)
+                .mapToDouble(Double::doubleValue)
+                .sum();
+    }
+
+    private double sonnebornBerger(UUID playerId, Map<UUID, Double> scores) {
+        double sb = 0.0;
+        for (Round round : rounds) {
+            for (Pairing pairing : round.getPairings()) {
+                if (!pairing.involves(playerId) || pairing.isBye()) {
+                    continue;
+                }
+                UUID opponentId = pairing.opponentOf(playerId);
+                double opponentScore = scores.getOrDefault(opponentId, 0.0);
+                double points = pairing.pointsFor(playerId);
+                sb += points * opponentScore;
+            }
+        }
+        return sb;
+    }
+
+    private double directEncounterScore(UUID playerId, Map<UUID, Double> scores) {
+        double myScore = scores.get(playerId);
+        Map<UUID, Double> filtered = scores.entrySet().stream()
+                .filter(e -> Math.abs(e.getValue() - myScore) < 0.001)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        if (filtered.size() <= 1) {
+            return myScore;
+        }
+        double encounter = 0.0;
+        for (Round round : rounds) {
+            for (Pairing pairing : round.getPairings()) {
+                if (!pairing.involves(playerId) || pairing.isBye()) {
+                    continue;
+                }
+                UUID opponentId = pairing.opponentOf(playerId);
+                if (filtered.containsKey(opponentId)) {
+                    encounter += pairing.pointsFor(playerId);
+                }
+            }
+        }
+        return encounter;
+    }
+
     private List<UUID> opponentsOf(UUID playerId) {
         return rounds.stream()
                 .flatMap(round -> round.getPairings().stream())
                 .map(pairing -> pairing.opponentOf(playerId))
                 .filter(Objects::nonNull)
                 .toList();
+    }
+
+    private double scoreBeforeRound(UUID playerId, int roundNumber) {
+        return rounds.stream()
+                .filter(r -> r.getNumber() < roundNumber)
+                .flatMap(r -> r.getPairings().stream())
+                .mapToDouble(p -> p.pointsFor(playerId))
+                .sum();
     }
 
     private List<PairingCandidate> buildCandidates() {
@@ -201,6 +293,9 @@ public class Tournament {
                     int whiteGames = 0;
                     int blackGames = 0;
                     boolean hadBye = false;
+                    int lastColor = PairingCandidate.NONE;
+                    int downFloats = 0;
+                    int upFloats = 0;
                     for (Round round : rounds) {
                         for (Pairing pairing : round.getPairings()) {
                             if (!pairing.involves(playerId)) {
@@ -208,17 +303,30 @@ public class Tournament {
                             }
                             if (pairing.isBye()) {
                                 hadBye = true;
-                            } else if (pairing.getWhitePlayerId().equals(playerId)) {
+                                continue;
+                            }
+                            if (pairing.getWhitePlayerId().equals(playerId)) {
                                 whiteGames++;
+                                lastColor = PairingCandidate.WHITE;
                                 opponents.add(pairing.getBlackPlayerId());
                             } else {
                                 blackGames++;
+                                lastColor = PairingCandidate.BLACK;
                                 opponents.add(pairing.getWhitePlayerId());
+                            }
+                            UUID opponentId = pairing.opponentOf(playerId);
+                            double myScoreBefore = scoreBeforeRound(playerId, round.getNumber());
+                            double opponentScoreBefore = scoreBeforeRound(opponentId, round.getNumber());
+                            if (myScoreBefore > opponentScoreBefore + 0.01) {
+                                downFloats++;
+                            } else if (opponentScoreBefore > myScoreBefore + 0.01) {
+                                upFloats++;
                             }
                         }
                     }
                     return new PairingCandidate(playerId, byId.get(playerId).getRating(),
-                            scoreOf(playerId), opponents, whiteGames, blackGames, hadBye);
+                            scoreOf(playerId), opponents, whiteGames, blackGames, hadBye,
+                            lastColor, downFloats, upFloats);
                 })
                 .toList();
     }

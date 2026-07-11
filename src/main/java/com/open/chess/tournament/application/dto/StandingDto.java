@@ -11,6 +11,9 @@ public record StandingDto(
         int rating,
         double score,
         double buchholz,
+        double medianBuchholz,
+        double sonnebornBerger,
+        int wins,
         boolean active) {
 
     public static StandingDto from(PlayerStanding standing) {
@@ -21,6 +24,9 @@ public record StandingDto(
                 standing.rating(),
                 standing.score(),
                 standing.buchholz(),
+                standing.medianBuchholz(),
+                standing.sonnebornBerger(),
+                standing.wins(),
                 standing.active());
     }
 }

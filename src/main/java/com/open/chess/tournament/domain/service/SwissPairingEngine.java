@@ -125,20 +125,49 @@ public class SwissPairingEngine {
         for (int i = fold - 1; i >= 0; i--) {
             preferred.add(sameGroup.get(i));
         }
+        lowerGroups.sort(Comparator
+                .comparingInt(PairingCandidate::upFloats)
+                .thenComparing(Comparator.comparingDouble(PairingCandidate::score).reversed()
+                        .thenComparing(Comparator.comparingInt(PairingCandidate::rating).reversed())));
         preferred.addAll(lowerGroups);
         return preferred;
     }
 
     private Board assignColors(PairingCandidate higher, PairingCandidate lower, int boardIndex) {
+        int higherPref = higher.colorPreference();
+        int lowerPref = lower.colorPreference();
+        boolean higherAbsolute = higher.hasAbsoluteColorPreference();
+        boolean lowerAbsolute = lower.hasAbsoluteColorPreference();
+
+        Board board1 = new Board(higher.playerId(), lower.playerId());
+        Board board2 = new Board(lower.playerId(), higher.playerId());
+        Board board = higherPref == PairingCandidate.WHITE ? board1 : board2;
+
+        if (higherAbsolute && lowerAbsolute && higherPref != lowerPref) {
+            return board;
+        }
+        if (higherAbsolute && !lowerAbsolute) {
+            return board;
+        }
+        if (lowerAbsolute && !higherAbsolute) {
+            return lowerPref == PairingCandidate.WHITE ? board2 : board1;
+        }
+
         if (higher.colorBalance() < lower.colorBalance()) {
-            return new Board(higher.playerId(), lower.playerId());
+            return board1;
         }
+
         if (lower.colorBalance() < higher.colorBalance()) {
-            return new Board(lower.playerId(), higher.playerId());
+            return board2;
         }
-        // Equal color history: alternate who gets white across the boards.
-        return boardIndex % 2 == 0
-                ? new Board(higher.playerId(), lower.playerId())
-                : new Board(lower.playerId(), higher.playerId());
+
+        if (higher.lastColor() == PairingCandidate.BLACK && lower.lastColor() == PairingCandidate.WHITE) {
+            return board1;
+        }
+        if (higher.lastColor() == PairingCandidate.WHITE && lower.lastColor() == PairingCandidate.BLACK) {
+            return board2;
+        }
+
+        return boardIndex % 2 == 0 ? board1 : board2;
     }
 }
