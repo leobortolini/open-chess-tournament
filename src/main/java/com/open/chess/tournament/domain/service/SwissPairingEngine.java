@@ -13,11 +13,19 @@ import java.util.UUID;
 
  * Players are ranked by score, then rating. Within a score group the top
  * half is preferably paired against the bottom half (1 vs n/2+1, ...).
- * Rematches are never allowed: pairings are found via backtracking and,
- * with an odd number of players, every bye choice is attempted (preferring
- * the lowest-ranked player without a previous bye) until a rematch-free
- * pairing exists. If no such pairing is possible, the round cannot be
- * generated and a domain error is raised.
+ * Absolute FIDE criteria are enforced:
+ * - Rematches are never allowed (pairings are found via backtracking).
+ * - A player never receives more than one bye; with an odd number of
+ *   players every eligible bye choice is attempted, preferring the
+ *   lowest-ranked player who did not float down in the previous round.
+ * - Two players with the same absolute color preference (color difference
+ *   of two or more, or the same color in the last two games) are not
+ *   paired together; this rule alone is relaxed, as a last resort, when no
+ *   pairing would exist otherwise.
+ * Consecutive upfloats are avoided by preference when a player must be
+ * paired against a lower score group. If no rematch-free, single-bye
+ * pairing is possible, the round cannot be generated and a domain error
+ * is raised.
  */
 public class SwissPairingEngine {
 
@@ -32,6 +40,17 @@ public class SwissPairingEngine {
                         .thenComparing(candidate -> candidate.playerId().toString()))
                 .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
 
+        PairingPlan plan = attempt(ranked, true);
+        if (plan == null) {
+            plan = attempt(ranked, false);
+        }
+        if (plan == null) {
+            throw new NoPairingPossibleException("Unable to generate a round without rematches or a second bye");
+        }
+        return plan;
+    }
+
+    private PairingPlan attempt(List<PairingCandidate> ranked, boolean enforceColorRule) {
         UUID byePlayerId = null;
         List<PairingCandidate[]> pairs;
         if (ranked.size() % 2 != 0) {
@@ -39,17 +58,17 @@ public class SwissPairingEngine {
             for (PairingCandidate byeCandidate : byeCandidatesInPreferenceOrder(ranked)) {
                 List<PairingCandidate> toPair = new ArrayList<>(ranked);
                 toPair.remove(byeCandidate);
-                pairs = solve(toPair);
+                pairs = solve(toPair, enforceColorRule);
                 if (pairs != null) {
                     byePlayerId = byeCandidate.playerId();
                     break;
                 }
             }
         } else {
-            pairs = solve(ranked);
+            pairs = solve(ranked, enforceColorRule);
         }
         if (pairs == null) {
-            throw new NoPairingPossibleException("Unable to generate a round without rematches");
+            return null;
         }
 
         List<Board> boards = new ArrayList<>(pairs.size());
@@ -60,25 +79,29 @@ public class SwissPairingEngine {
     }
 
     /**
-     * Bye attempts from the bottom of the ranking up, players without a
-     * previous bye first.
+     * Bye attempts from the bottom of the ranking up. Players who already
+     * had a bye are never eligible; a bye is a downfloat, so players who
+     * floated down in the previous round are tried last.
      */
     private List<PairingCandidate> byeCandidatesInPreferenceOrder(List<PairingCandidate> ranked) {
-        List<PairingCandidate> withoutBye = new ArrayList<>();
-        List<PairingCandidate> withBye = new ArrayList<>();
+        List<PairingCandidate> preferred = new ArrayList<>();
+        List<PairingCandidate> recentDownfloaters = new ArrayList<>();
         for (int i = ranked.size() - 1; i >= 0; i--) {
             PairingCandidate candidate = ranked.get(i);
             if (candidate.hadBye()) {
-                withBye.add(candidate);
+                continue;
+            }
+            if (candidate.floatedDownLastRound()) {
+                recentDownfloaters.add(candidate);
             } else {
-                withoutBye.add(candidate);
+                preferred.add(candidate);
             }
         }
-        withoutBye.addAll(withBye);
-        return withoutBye;
+        preferred.addAll(recentDownfloaters);
+        return preferred;
     }
 
-    private List<PairingCandidate[]> solve(List<PairingCandidate> remaining) {
+    private List<PairingCandidate[]> solve(List<PairingCandidate> remaining, boolean enforceColorRule) {
         if (remaining.isEmpty()) {
             return new ArrayList<>();
         }
@@ -87,10 +110,13 @@ public class SwissPairingEngine {
             if (first.hasPlayed(opponent.playerId())) {
                 continue;
             }
+            if (enforceColorRule && haveSameAbsoluteColorPreference(first, opponent)) {
+                continue;
+            }
             List<PairingCandidate> rest = new ArrayList<>(remaining);
             rest.remove(first);
             rest.remove(opponent);
-            List<PairingCandidate[]> solution = solve(rest);
+            List<PairingCandidate[]> solution = solve(rest, enforceColorRule);
             if (solution != null) {
                 solution.addFirst(new PairingCandidate[]{first, opponent});
                 return solution;
@@ -99,10 +125,17 @@ public class SwissPairingEngine {
         return null;
     }
 
+    private boolean haveSameAbsoluteColorPreference(PairingCandidate first, PairingCandidate opponent) {
+        return first.hasAbsoluteColorPreference()
+                && opponent.hasAbsoluteColorPreference()
+                && first.colorPreference() == opponent.colorPreference();
+    }
+
     /**
      * Opponent preference for the group leader: fold order inside the same
      * score group (the opposite-half player first), then lower score groups
-     * from the top down.
+     * from the top down, avoiding players who upfloated in the previous
+     * round or upfloated often before.
      */
     private List<PairingCandidate> preferredOpponents(PairingCandidate first, List<PairingCandidate> remaining) {
         List<PairingCandidate> sameGroup = new ArrayList<>();
@@ -126,7 +159,8 @@ public class SwissPairingEngine {
             preferred.add(sameGroup.get(i));
         }
         lowerGroups.sort(Comparator
-                .comparingInt(PairingCandidate::upFloats)
+                .comparing(PairingCandidate::floatedUpLastRound)
+                .thenComparingInt(PairingCandidate::upFloats)
                 .thenComparing(Comparator.comparingDouble(PairingCandidate::score).reversed()
                         .thenComparing(Comparator.comparingInt(PairingCandidate::rating).reversed())));
         preferred.addAll(lowerGroups);
@@ -139,35 +173,41 @@ public class SwissPairingEngine {
         boolean higherAbsolute = higher.hasAbsoluteColorPreference();
         boolean lowerAbsolute = lower.hasAbsoluteColorPreference();
 
-        Board board1 = new Board(higher.playerId(), lower.playerId());
-        Board board2 = new Board(lower.playerId(), higher.playerId());
-        Board board = higherPref == PairingCandidate.WHITE ? board1 : board2;
+        Board higherWhite = new Board(higher.playerId(), lower.playerId());
+        Board higherBlack = new Board(lower.playerId(), higher.playerId());
+        Board higherChoice = higherPref == PairingCandidate.WHITE ? higherWhite : higherBlack;
 
-        if (higherAbsolute && lowerAbsolute && higherPref != lowerPref) {
-            return board;
+        if (higherAbsolute && lowerAbsolute) {
+            // Opposite preferences satisfy both; equal preferences only
+            // happen when the color rule was relaxed, and then the higher
+            // ranked player's preference prevails.
+            return higherChoice;
         }
-        if (higherAbsolute && !lowerAbsolute) {
-            return board;
+        if (higherAbsolute) {
+            return higherChoice;
         }
-        if (lowerAbsolute && !higherAbsolute) {
-            return lowerPref == PairingCandidate.WHITE ? board2 : board1;
+        if (lowerAbsolute) {
+            return lowerPref == PairingCandidate.WHITE ? higherBlack : higherWhite;
         }
 
         if (higher.colorBalance() < lower.colorBalance()) {
-            return board1;
+            return higherWhite;
         }
-
         if (lower.colorBalance() < higher.colorBalance()) {
-            return board2;
+            return higherBlack;
         }
 
         if (higher.lastColor() == PairingCandidate.BLACK && lower.lastColor() == PairingCandidate.WHITE) {
-            return board1;
+            return higherWhite;
         }
         if (higher.lastColor() == PairingCandidate.WHITE && lower.lastColor() == PairingCandidate.BLACK) {
-            return board2;
+            return higherBlack;
         }
 
-        return boardIndex % 2 == 0 ? board1 : board2;
+        if (higher.lastColor() == PairingCandidate.NONE && lower.lastColor() == PairingCandidate.NONE) {
+            // First round: alternate colors down the boards.
+            return boardIndex % 2 == 0 ? higherWhite : higherBlack;
+        }
+        return higherChoice;
     }
 }

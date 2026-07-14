@@ -212,7 +212,7 @@ class SwissPairingEngineTest {
     }
 
     @Test
-    void byeGoesToPlayerWithPreviousByeWhenNoOtherOption() {
+    void byeNeverGoesToPlayerWhoAlreadyHadOne() {
         UUID a = UUID.randomUUID();
         UUID b = UUID.randomUUID();
         UUID c = UUID.randomUUID();
@@ -228,6 +228,152 @@ class SwissPairingEngineTest {
 
         assertEquals(a, plan.byePlayerId());
         assertEquals(1, plan.boards().size());
+        assertPaired(plan, b, c);
+    }
+
+    @Test
+    void throwsWhenOnlyPairingWouldRequireASecondBye() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.5, Set.of(b), 1, 0, true,
+                        PairingCandidate.WHITE, 0, 0),
+                candidate(b, 1700, 1.0, Set.of(a), 0, 1, true,
+                        PairingCandidate.BLACK, 0, 0),
+                candidate(c, 1600, 0.5, Set.of(), 0, 0, false));
+
+        assertThrows(NoPairingPossibleException.class, () -> engine.generate(candidates));
+    }
+
+    @Test
+    void byePrefersPlayerWhoDidNotFloatDownLastRound() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.0, Set.of(), 1, 0, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(b, 1700, 0.5, Set.of(), 0, 1, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(c, 1600, 0.0, Set.of(), 0, 1, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 1, 0, true, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(b, plan.byePlayerId());
+        assertEquals(1, plan.boards().size());
+        assertPaired(plan, a, c);
+    }
+
+    @Test
+    void avoidsPairingTwoPlayersWithSameAbsoluteColorPreference() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        UUID d = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 2000, 1.0, Set.of(), 2, 0, false,
+                        PairingCandidate.WHITE, 0, 0),
+                candidate(b, 1900, 1.0, Set.of(), 0, 2, false,
+                        PairingCandidate.BLACK, 0, 0),
+                candidate(c, 1800, 1.0, Set.of(), 2, 0, false,
+                        PairingCandidate.WHITE, 0, 0),
+                candidate(d, 1700, 1.0, Set.of(), 0, 2, false,
+                        PairingCandidate.BLACK, 0, 0));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(2, plan.boards().size());
+        // Fold order would pair a (due black) with c (also due black);
+        // the color rule forces a different opponent for each of them.
+        assertPaired(plan, a, d);
+        assertPaired(plan, b, c);
+        for (PairingPlan.Board board : plan.boards()) {
+            assertTrue(board.whitePlayerId().equals(b) || board.whitePlayerId().equals(d),
+                    "Players due white must receive white: " + board);
+        }
+    }
+
+    @Test
+    void relaxesColorRuleOnlyWhenNoAlternativeExists() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.0, Set.of(), 2, 0, false,
+                        PairingCandidate.WHITE, 0, 0),
+                candidate(b, 1700, 1.0, Set.of(), 2, 0, false,
+                        PairingCandidate.WHITE, 0, 0));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(1, plan.boards().size());
+        PairingPlan.Board board = plan.boards().getFirst();
+        // Both are due black; the higher ranked player's preference prevails.
+        assertEquals(b, board.whitePlayerId());
+        assertEquals(a, board.blackPlayerId());
+    }
+
+    @Test
+    void sameColorInLastTwoGamesCreatesAbsolutePreference() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.0, Set.of(), 2, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.WHITE, 0, 0, false, false),
+                candidate(b, 1700, 1.0, Set.of(), 2, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.BLACK, 0, 0, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        PairingPlan.Board board = plan.boards().getFirst();
+        // a played white twice in a row: black is now an absolute
+        // preference, beating b's equal color balance.
+        assertEquals(b, board.whitePlayerId());
+        assertEquals(a, board.blackPlayerId());
+    }
+
+    @Test
+    void balancedPlayerWithSameLastTwoColorsIsDueTheOtherColor() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.0, Set.of(), 2, 2, false,
+                        PairingCandidate.BLACK, PairingCandidate.BLACK, 0, 0, false, false),
+                candidate(b, 1700, 1.0, Set.of(), 2, 2, false,
+                        PairingCandidate.WHITE, PairingCandidate.BLACK, 0, 0, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        PairingPlan.Board board = plan.boards().getFirst();
+        // a has an even balance but played black twice in a row: white is
+        // an absolute preference despite the balanced color history.
+        assertEquals(a, board.whitePlayerId());
+        assertEquals(b, board.blackPlayerId());
+    }
+
+    @Test
+    void avoidsUpfloatingSamePlayerTwiceInARow() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        UUID d = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.0, Set.of(b), 1, 0, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(b, 1700, 1.0, Set.of(a), 0, 1, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(c, 1600, 0.0, Set.of(), 0, 1, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 1, false, true),
+                candidate(d, 1500, 0.0, Set.of(), 1, 0, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 1, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(2, plan.boards().size());
+        // a and b must both pair down; c upfloated in the previous round,
+        // so d (same upfloat count, but not in the last round) goes first.
+        assertPaired(plan, a, d);
         assertPaired(plan, b, c);
     }
 
@@ -338,7 +484,7 @@ class SwissPairingEngineTest {
 
     private PairingCandidate candidate(UUID id, int rating, double score, Set<UUID> opponents,
                                        int whiteGames, int blackGames, boolean hadBye) {
-        return new PairingCandidate(id, rating, score, opponents, whiteGames, blackGames, hadBye,
+        return candidate(id, rating, score, opponents, whiteGames, blackGames, hadBye,
                 PairingCandidate.NONE, 0, 0);
     }
 
@@ -346,7 +492,16 @@ class SwissPairingEngineTest {
                                        int whiteGames, int blackGames, boolean hadBye,
                                        int lastColor, int downFloats, int upFloats) {
         return new PairingCandidate(id, rating, score, opponents, whiteGames, blackGames, hadBye,
-                lastColor, downFloats, upFloats);
+                lastColor, PairingCandidate.NONE, downFloats, upFloats, false, false);
+    }
+
+    private PairingCandidate candidate(UUID id, int rating, double score, Set<UUID> opponents,
+                                       int whiteGames, int blackGames, boolean hadBye,
+                                       int lastColor, int previousColor, int downFloats, int upFloats,
+                                       boolean floatedDownLastRound, boolean floatedUpLastRound) {
+        return new PairingCandidate(id, rating, score, opponents, whiteGames, blackGames, hadBye,
+                lastColor, previousColor, downFloats, upFloats,
+                floatedDownLastRound, floatedUpLastRound);
     }
 
     private void assertPaired(PairingPlan plan, UUID one, UUID other) {

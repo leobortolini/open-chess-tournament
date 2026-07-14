@@ -12,8 +12,11 @@ public record PairingCandidate(
         int blackGames,
         boolean hadBye,
         int lastColor,
+        int previousColor,
         int downFloats,
-        int upFloats) {
+        int upFloats,
+        boolean floatedDownLastRound,
+        boolean floatedUpLastRound) {
 
     public static final int WHITE = 1;
     public static final int BLACK = -1;
@@ -27,15 +30,26 @@ public record PairingCandidate(
         return previousOpponents.contains(opponentId);
     }
 
+    /**
+     * Due color: the one that restores the white/black balance, or the
+     * alternate of the last color when the balance is even.
+     */
     public int colorPreference() {
-        return whiteGames > blackGames ? BLACK : WHITE;
+        if (colorBalance() > 0) {
+            return BLACK;
+        }
+        if (colorBalance() < 0) {
+            return WHITE;
+        }
+        return lastColor == WHITE ? BLACK : WHITE;
     }
 
+    /**
+     * FIDE absolute color preference: color difference of two or more, or
+     * the same color in the last two played games.
+     */
     public boolean hasAbsoluteColorPreference() {
-        return Math.abs(colorBalance()) >= 2;
-    }
-
-    public boolean hasStrongColorPreference() {
-        return Math.abs(colorBalance()) >= 1;
+        return Math.abs(colorBalance()) >= 2
+                || (lastColor != NONE && lastColor == previousColor);
     }
 }

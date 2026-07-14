@@ -285,6 +285,7 @@ public class Tournament {
     private List<PairingCandidate> buildCandidates() {
         Map<UUID, Player> byId = players.stream()
                 .collect(Collectors.toMap(Player::getId, Function.identity()));
+        int lastRoundNumber = rounds.isEmpty() ? 0 : rounds.getLast().getNumber();
         return players.stream()
                 .filter(Player::isActive)
                 .map(player -> {
@@ -294,17 +295,25 @@ public class Tournament {
                     int blackGames = 0;
                     boolean hadBye = false;
                     int lastColor = PairingCandidate.NONE;
+                    int previousColor = PairingCandidate.NONE;
                     int downFloats = 0;
                     int upFloats = 0;
+                    boolean floatedDownLastRound = false;
+                    boolean floatedUpLastRound = false;
                     for (Round round : rounds) {
+                        boolean isLastRound = round.getNumber() == lastRoundNumber;
                         for (Pairing pairing : round.getPairings()) {
                             if (!pairing.involves(playerId)) {
                                 continue;
                             }
                             if (pairing.isBye()) {
                                 hadBye = true;
+                                if (isLastRound) {
+                                    floatedDownLastRound = true;
+                                }
                                 continue;
                             }
+                            previousColor = lastColor;
                             if (pairing.getWhitePlayerId().equals(playerId)) {
                                 whiteGames++;
                                 lastColor = PairingCandidate.WHITE;
@@ -319,14 +328,21 @@ public class Tournament {
                             double opponentScoreBefore = scoreBeforeRound(opponentId, round.getNumber());
                             if (myScoreBefore > opponentScoreBefore + 0.01) {
                                 downFloats++;
+                                if (isLastRound) {
+                                    floatedDownLastRound = true;
+                                }
                             } else if (opponentScoreBefore > myScoreBefore + 0.01) {
                                 upFloats++;
+                                if (isLastRound) {
+                                    floatedUpLastRound = true;
+                                }
                             }
                         }
                     }
                     return new PairingCandidate(playerId, byId.get(playerId).getRating(),
                             scoreOf(playerId), opponents, whiteGames, blackGames, hadBye,
-                            lastColor, downFloats, upFloats);
+                            lastColor, previousColor, downFloats, upFloats,
+                            floatedDownLastRound, floatedUpLastRound);
                 })
                 .toList();
     }
