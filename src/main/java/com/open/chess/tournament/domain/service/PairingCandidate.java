@@ -42,7 +42,8 @@ public record PairingCandidate(
     /**
      * Due color: the one that restores the white/black balance, or the
      * alternate of the last color when the balance is even. Only played
-     * games count: byes and forfeits leave the color history untouched.
+     * games count: byes and forfeits leave the color history untouched,
+     * and a player with no played games has no preference (NONE).
      */
     public int colorPreference() {
         if (colorBalance() > 0) {
@@ -50,6 +51,9 @@ public record PairingCandidate(
         }
         if (colorBalance() < 0) {
             return WHITE;
+        }
+        if (lastColor == NONE) {
+            return NONE;
         }
         return lastColor == WHITE ? BLACK : WHITE;
     }

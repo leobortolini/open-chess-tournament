@@ -7,6 +7,7 @@ Backend for managing chess tournaments with **Swiss-system** pairing. Exposed as
 - Java 25 / Spring Boot 4.1
 - PostgreSQL 16 (via Docker Compose)
 - Flyway for database versioning
+- JGraphT (Blossom V weighted matching) for the pairing engine
 - DDD architecture
 
 ## Running
@@ -40,21 +41,147 @@ Code organized in DDD layers under `src/main/java/com/open/chess/tournament/`:
 
 | Layer | Package | Contents |
 |---|---|---|
-| Domain | `domain` | `Tournament` aggregate (root) with `Player`, `Round` and `Pairing`; `SwissPairingEngine` domain service (pure, framework-free); exceptions and repository interface |
+| Domain | `domain` | `Tournament` aggregate (root) with `Player`, `Round` and `Pairing`; `SwissPairingEngine` and `TrfExporter` domain services (pure, framework-free); exceptions and repository interface |
 | Application | `application` | `TournamentService` (use cases, transactions) and output DTOs |
 | Infrastructure | `infrastructure` | Spring Data JPA repository and bean configuration |
 | Interface | `interfaces/rest` | REST controllers, validated input DTOs and global error handler |
 
 All business rules live in the domain. Scores and standings are **computed** from pairing results (never stored), eliminating any risk of inconsistency.
 
-## Swiss pairing rules
+## Swiss pairing engine
 
-- Players are ranked by **score**, then by **rating**.
-- Within each score group, the top half plays the bottom half (*fold pairing*: 1st vs middle+1st).
-- **Rematches never happen**: the engine uses backtracking to find a combination where nobody meets a previous opponent. If no such combination exists, the tournament is **finished automatically**.
-- With an odd number of players, the **bye** (worth 1 point) goes to the lowest-ranked player who has not received one yet. If that choice makes a rematch-free pairing impossible, other bye candidates are tried.
-- **Colors**: white goes to the player with fewer white games in their history; on ties, it alternates across boards.
-- Win = 1 point, draw = 0.5, loss = 0. Standings tiebreaks: **Buchholz** (sum of the scores of opponents faced), then rating.
+`SwissPairingEngine` implements the FIDE (Dutch) Swiss criteria as a
+**graph problem**: every round is a *minimum-weight perfect matching*,
+solved with the Blossom V algorithm (JGraphT's
+`KolmogorovWeightedPerfectMatching`). This is the same architecture used
+by FIDE-endorsed engines such as bbpPairings, and it makes the pairing
+**globally optimal**: instead of pairing the top player first and hoping
+the rest works out (a greedy approach can paint itself into a corner),
+the engine evaluates the round as a whole.
+
+### The graph model
+
+- **Vertices** — one per active player, ranked by score, then rating.
+  With an odd number of players, one extra *virtual bye vertex* is added.
+- **Edges** — only between players allowed to meet. The FIDE *absolute*
+  criteria are encoded as **missing edges**: two players who already met
+  get no edge (C.1 — a forfeited game still counts as having met), and
+  the bye vertex only connects to players who never had a bye nor won by
+  forfeit (C.2 / C.04.1.d). If the resulting graph has no perfect
+  matching, no legal round exists and the tournament finishes.
+- **Weights** — the FIDE *quality* criteria, encoded in strictly
+  decreasing tiers so that the matching minimizes them lexicographically
+  (no amount of a lower tier can outweigh a single unit of a higher one):
+
+| Tier | FIDE criterion | Cost per edge |
+|---|---|---|
+| 1 | C.3 — both players due the same **absolute** color (balance ≥ 2 or same color twice in a row) | `6e9` |
+| 2 | C.6 — score difference, **quadratic**: `5e6 × (2Δ)²` (capped) | `5e6`–`1.8e8` |
+| 3 | C.8 — both players due the same color | `1e5` (+`5e4` if both strong) |
+| 4 | C.12/C.13 — repeating a down/upfloat from the previous round | `1200` |
+| 5 | D — fold order (S1×S2) deviation, same-half "exchange" pairs, floater position, bye rank | `1`–`20` |
+
+The quadratic score term means two 1-point floats (`2 × 4 units`) are
+cheaper than one 2-point float (`16 units`) — exactly the FIDE
+preference for spreading small score differences instead of
+concentrating a large one. Tier 1 is a *penalty* rather than a missing
+edge on purpose: when no legal round avoids pairing two players due the
+same absolute color (e.g. only two players left), the rule is relaxed —
+matching FIDE's own escape hatch — and the higher-ranked player receives
+their due color.
+
+### Worked example
+
+Four players after some rounds: `A` has 2.0 points and **already played
+C**, `B` and `C` have 1.0, `D` has 0.0.
+
+```
+        A (2.0)
+       ╱       ╲
+  2e7 ╱         ╲ 8e7          A–C: no edge (rematch)
+     ╱           ╲             A–B: Δ=1.0 → 5e6 × (2·1)²  = 2e7
+    B (1.0)       D (0.0)      A–D: Δ=2.0 → 5e6 × (2·2)²  = 8e7
+    │   ╲        ╱             B–C: same group, fold order = 0
+  0 │    ╲ 2e7  ╱ 2e7          B–D: Δ=1.0                  = 2e7
+    │     ╲    ╱               C–D: Δ=1.0                  = 2e7
+    C (1.0) ──╯
+```
+
+Two perfect matchings exist:
+
+| Matching | Cost |
+|---|---|
+| **{A–B, C–D}** | 2e7 + 2e7 = **4e7** ✓ chosen |
+| {A–D, B–C} | 8e7 + 0 = 8e7 |
+
+A greedy engine that "sends the leader down and pairs the rest" could
+happily produce the second round; the matching provably never does.
+
+Colors are assigned *after* the matching (FIDE E rules): grant absolute
+preferences, then the larger color imbalance, then alternate from the
+last played color; in round one, colors alternate down the boards. A
+player with no played games (only byes/forfeits) has **no** color
+preference at all.
+
+### Gotcha: the Blossom V `1e10` threshold
+
+JGraphT's `KolmogorovWeightedPerfectMatching` declares:
+
+```java
+public static final double NO_PERFECT_MATCHING_THRESHOLD = 1.0E10;
+```
+
+When the algorithm's dual variables grow past this value it gives up and
+throws *"There is no perfect matching in the specified graph"* — **even
+when one exists**. Dual values scale with the edge weights, so any
+weight near or above `1e10` can trigger a false negative. This bit us
+directly: the tiers were originally spaced up to `1e14` and a plain
+3-player round (a 4-vertex graph with an obvious perfect matching) was
+reported as unpairable.
+
+The fix was recalibrating all tiers so the maximum edge weight stays
+around `6e9`. The trade-off: each tier's unit must still exceed the
+maximum possible *sum* of all lower tiers across a round, and with only
+~9 usable orders of magnitude that arithmetic holds for fields of up to
+**64 players**. Beyond that the weights remain a faithful approximation,
+but the tier separation is no longer mathematically strict. If you touch
+the `COST_*` constants, re-check both bounds — and run the JaVaFo
+harness (below) to catch regressions.
+
+### Rules implemented
+
+- **No rematches, ever** (C.1); forfeited games count as a meeting.
+- **Bye** (1 point) at most once per player, never to a forfeit winner,
+  preferring the lowest-ranked player of the lowest score group (C.2).
+- **Forfeits**: `+/-` results score like wins/losses but are *unplayed*
+  — they do not affect color history and are excluded from "played each
+  other once" only in the color sense, not the pairing sense.
+- **Colors**: balance never exceeds ±2 and no player gets the same color
+  three times in a row (absolute preference), verified by a simulated
+  33-player, 9-round tournament in the test suite.
+- **Floats**: down/upfloats are not repeated in consecutive rounds when
+  a same-cost alternative exists.
+- **Tie-breaks**: direct encounter, Buchholz, median Buchholz,
+  Sonneborn-Berger, number of wins, rating. Unplayed games (byes,
+  forfeits) are replaced by the FIDE **virtual opponent** (C.04.5): the
+  player's score before the round, plus the complement of the result,
+  plus half a point per remaining round.
+
+### Validation against JaVaFo
+
+`TrfExporter` exports any tournament as a FIDE **TRF16** report file
+(the format used for FIDE rating submission), which feeds
+`JaVaFoComparisonTest`: simulated tournaments where every round is also
+paired by [JaVaFo](http://www.rrweb.org/javafo/JaVaFo.htm), the FIDE
+reference implementation, from the exact same position. The harness
+asserts identical first rounds, prints every divergence and enforces a
+minimum agreement floor. See `tools/javafo/README.md` for setup (the JAR
+is downloaded separately and gitignored); without it the test is skipped.
+
+Divergences in later rounds are expected: among *equally optimal*
+pairings the Dutch rules pick a canonical one via their transposition
+order (D.1/D.2), which only a bit-exact reimplementation reproduces.
+Every generated round is still fully legal.
 
 ## Tournament lifecycle
 
@@ -292,7 +419,11 @@ Only accepts pairings from the **current round** (the last one generated). The r
 
 | Field | Type | Accepted values |
 |---|---|---|
-| `result` | string | `WHITE_WINS`, `BLACK_WINS`, `DRAW` |
+| `result` | string | `WHITE_WINS`, `BLACK_WINS`, `DRAW`, `WHITE_WINS_FORFEIT`, `BLACK_WINS_FORFEIT`, `DOUBLE_FORFEIT` |
+
+Forfeit results score 1–0 (or 0–0 for a double forfeit) but the game
+counts as **unplayed**: it does not enter the color history, the winner
+becomes ineligible for a bye, and tie-breaks use the virtual opponent.
 
 ```bash
 curl -X PUT http://localhost:8080/api/tournaments/{tournamentId}/pairings/{pairingId}/result \
@@ -321,7 +452,10 @@ When the last result of the last round is reported, the tournament automatically
 
 `GET /api/tournaments/{tournamentId}/standings` → `200 OK`
 
-Ordered by score, then Buchholz, then rating. Available at any moment (partial while the tournament is running).
+Ordered by score, then direct encounter, Buchholz, median Buchholz,
+Sonneborn-Berger, number of wins and rating. Unplayed games use the FIDE
+virtual opponent in the Buchholz family. Available at any moment
+(partial while the tournament is running).
 
 ```bash
 curl http://localhost:8080/api/tournaments/{tournamentId}/standings
@@ -338,6 +472,9 @@ curl http://localhost:8080/api/tournaments/{tournamentId}/standings
     "rating": 2100,
     "score": 2.0,
     "buchholz": 3.5,
+    "medianBuchholz": 2.0,
+    "sonnebornBerger": 2.75,
+    "wins": 2,
     "active": true
   },
   {
@@ -347,6 +484,9 @@ curl http://localhost:8080/api/tournaments/{tournamentId}/standings
     "rating": 1950,
     "score": 1.5,
     "buchholz": 3.0,
+    "medianBuchholz": 1.5,
+    "sonnebornBerger": 2.25,
+    "wins": 1,
     "active": true
   }
 ]
@@ -390,6 +530,6 @@ Flyway migrations in `src/main/resources/db/migration/`. Schema:
 - `tournaments` — tournament (`status`: `REGISTRATION` | `IN_PROGRESS` | `FINISHED`)
 - `players` — tournament players
 - `rounds` — rounds (`round_number` unique per tournament)
-- `pairings` — pairings per round (`black_player_id` null = bye; `result`: `PENDING` | `WHITE_WINS` | `BLACK_WINS` | `DRAW` | `BYE`)
+- `pairings` — pairings per round (`black_player_id` null = bye; `result`: `PENDING` | `WHITE_WINS` | `BLACK_WINS` | `DRAW` | `BYE` | `WHITE_WINS_FORFEIT` | `BLACK_WINS_FORFEIT` | `DOUBLE_FORFEIT`)
 
 Default connection (configurable in `application.properties`): `jdbc:postgresql://localhost:5432/chess_tournament`, user/password `chess`/`chess`.

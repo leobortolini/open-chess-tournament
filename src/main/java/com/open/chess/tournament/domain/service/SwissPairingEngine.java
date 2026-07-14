@@ -30,8 +30,12 @@ import java.util.UUID;
  *   3. C.8  — minimize pairs where both players are due the same color.
  *   4. C.12/C.13 — avoid floating a player in the same direction (or
  *             giving the bye to a downfloater) two rounds in a row.
- *   5. D    — fold order inside a score group (1 vs n/2+1, ...) and the
- *             bye to the lowest-ranked eligible player.
+ *   5. D    — inside a score group, pair the top half (S1) against the
+ *             bottom half (S2) in fold order (1 vs n/2+1, ...), treating
+ *             same-half pairs as exchanges that rank below any S1-S2
+ *             transposition; floaters meet the top of the receiving
+ *             group, and the bye goes to the lowest-ranked eligible
+ *             player.
  * Weights must stay below the Blossom V implementation's 1e10 feasibility
  * threshold, which bounds how far apart the tiers can sit: the ordering
  * is strictly lexicographic for fields of up to 64 players, and remains a
@@ -40,13 +44,15 @@ import java.util.UUID;
  */
 public class SwissPairingEngine {
 
-    private static final double COST_SAME_ABSOLUTE_COLOR = 2e9;
-    private static final double COST_SCORE_DIFF_UNIT = 1.5e6;
-    private static final double COST_SAME_COLOR_PREFERENCE = 3e4;
-    private static final double COST_BOTH_STRONG_PREFERENCE = 1.5e4;
-    private static final double COST_FLOAT_REPEAT = 400;
+    private static final double COST_SAME_ABSOLUTE_COLOR = 6e9;
+    private static final double COST_SCORE_DIFF_UNIT = 5e6;
+    private static final double COST_SAME_COLOR_PREFERENCE = 1e5;
+    private static final double COST_BOTH_STRONG_PREFERENCE = 5e4;
+    private static final double COST_FLOAT_REPEAT = 1200;
+    private static final double COST_HALF_EXCHANGE = 20;
     private static final int SCORE_DIFF_CAP = 36;
     private static final int FOLD_DEVIATION_CAP = 10;
+    private static final int UPFLOAT_POSITION_CAP = 10;
 
     public PairingPlan generate(List<PairingCandidate> candidates) {
         if (candidates.size() < 2) {
@@ -129,7 +135,8 @@ public class SwissPairingEngine {
         PairingCandidate lower = ranked.get(j);
         double cost = 0.0;
 
-        boolean samePreference = higher.colorPreference() == lower.colorPreference();
+        boolean samePreference = higher.colorPreference() != PairingCandidate.NONE
+                && higher.colorPreference() == lower.colorPreference();
         if (samePreference && higher.hasAbsoluteColorPreference() && lower.hasAbsoluteColorPreference()) {
             cost += COST_SAME_ABSOLUTE_COLOR;
         } else if (samePreference) {
@@ -148,10 +155,20 @@ public class SwissPairingEngine {
             if (lower.floatedUpLastRound()) {
                 cost += COST_FLOAT_REPEAT;
             }
+            // The floater should meet the top of the receiving group.
+            cost += Math.min(j - groupStart[j], UPFLOAT_POSITION_CAP);
         } else {
-            int groupSize = groupSize(ranked, groupStart, i);
-            int idealGap = groupSize / 2;
-            cost += Math.min(Math.abs((j - i) - idealGap), FOLD_DEVIATION_CAP);
+            // Inside a score group the Dutch rules pair the top half (S1)
+            // against the bottom half (S2); a pair within the same half is
+            // an exchange, which ranks below any S1-S2 transposition.
+            int half = groupSize(ranked, groupStart, i) / 2;
+            int posHigher = i - groupStart[i];
+            int posLower = j - groupStart[j];
+            if (posLower < half || posHigher >= half) {
+                cost += COST_HALF_EXCHANGE;
+            } else {
+                cost += Math.min(Math.abs((posLower - half) - posHigher), FOLD_DEVIATION_CAP);
+            }
         }
         return cost;
     }
@@ -221,6 +238,9 @@ public class SwissPairingEngine {
         if (higher.lastColor() == PairingCandidate.NONE && lower.lastColor() == PairingCandidate.NONE) {
             // First round: alternate colors down the boards.
             return boardIndex % 2 == 0 ? higherWhite : higherBlack;
+        }
+        if (higherPref == PairingCandidate.NONE) {
+            return lowerPref == PairingCandidate.WHITE ? higherBlack : higherWhite;
         }
         return higherChoice;
     }
