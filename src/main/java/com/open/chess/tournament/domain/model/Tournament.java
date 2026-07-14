@@ -127,7 +127,8 @@ public class Tournament {
             throw new DomainException("Tournament has not started yet");
         }
         if (result == GameResult.PENDING || result == GameResult.BYE) {
-            throw new DomainException("Result must be WHITE_WINS, BLACK_WINS or DRAW");
+            throw new DomainException(
+                    "Result must be WHITE_WINS, BLACK_WINS, DRAW or a forfeit result");
         }
         Round round = currentRound()
                 .orElseThrow(() -> new DomainException("No round has been generated yet"));
@@ -157,9 +158,7 @@ public class Tournament {
         Map<UUID, Double> scores = players.stream()
                 .collect(Collectors.toMap(Player::getId, player -> scoreOf(player.getId())));
         Map<UUID, Double> buchholz = players.stream()
-                .collect(Collectors.toMap(Player::getId, player -> opponentsOf(player.getId()).stream()
-                        .mapToDouble(scores::get)
-                        .sum()));
+                .collect(Collectors.toMap(Player::getId, player -> buchholz(player.getId(), scores)));
         Map<UUID, Double> medianBuchholz = players.stream()
                 .collect(Collectors.toMap(Player::getId,
                         player -> medianBuchholz(player.getId(), scores)));
@@ -209,9 +208,45 @@ public class Tournament {
                 .count();
     }
 
+    /**
+     * Per-round opponent values for the Buchholz family of tie-breaks.
+     * Unplayed games (byes and forfeits) are replaced by a FIDE virtual
+     * opponent: same score as the player before the round, the complement
+     * of the player's result in that round, and a draw in every round
+     * played since.
+     */
+    private List<double[]> tieBreakContributions(UUID playerId, Map<UUID, Double> scores) {
+        int roundsSoFar = rounds.size();
+        List<double[]> contributions = new ArrayList<>();
+        for (Round round : rounds) {
+            for (Pairing pairing : round.getPairings()) {
+                if (!pairing.involves(playerId) || pairing.getResult() == GameResult.PENDING) {
+                    continue;
+                }
+                double points = pairing.pointsFor(playerId);
+                double opponentScore;
+                if (pairing.isPlayed()) {
+                    opponentScore = scores.getOrDefault(pairing.opponentOf(playerId), 0.0);
+                } else {
+                    opponentScore = scoreBeforeRound(playerId, round.getNumber())
+                            + (1.0 - points)
+                            + 0.5 * (roundsSoFar - round.getNumber());
+                }
+                contributions.add(new double[]{points, opponentScore});
+            }
+        }
+        return contributions;
+    }
+
+    private double buchholz(UUID playerId, Map<UUID, Double> scores) {
+        return tieBreakContributions(playerId, scores).stream()
+                .mapToDouble(contribution -> contribution[1])
+                .sum();
+    }
+
     private double medianBuchholz(UUID playerId, Map<UUID, Double> scores) {
-        List<Double> opponentScores = opponentsOf(playerId).stream()
-                .map(scores::get)
+        List<Double> opponentScores = tieBreakContributions(playerId, scores).stream()
+                .map(contribution -> contribution[1])
                 .sorted()
                 .toList();
         if (opponentScores.isEmpty()) {
@@ -228,19 +263,9 @@ public class Tournament {
     }
 
     private double sonnebornBerger(UUID playerId, Map<UUID, Double> scores) {
-        double sb = 0.0;
-        for (Round round : rounds) {
-            for (Pairing pairing : round.getPairings()) {
-                if (!pairing.involves(playerId) || pairing.isBye()) {
-                    continue;
-                }
-                UUID opponentId = pairing.opponentOf(playerId);
-                double opponentScore = scores.getOrDefault(opponentId, 0.0);
-                double points = pairing.pointsFor(playerId);
-                sb += points * opponentScore;
-            }
-        }
-        return sb;
+        return tieBreakContributions(playerId, scores).stream()
+                .mapToDouble(contribution -> contribution[0] * contribution[1])
+                .sum();
     }
 
     private double directEncounterScore(UUID playerId, Map<UUID, Double> scores) {
@@ -266,14 +291,6 @@ public class Tournament {
         return encounter;
     }
 
-    private List<UUID> opponentsOf(UUID playerId) {
-        return rounds.stream()
-                .flatMap(round -> round.getPairings().stream())
-                .map(pairing -> pairing.opponentOf(playerId))
-                .filter(Objects::nonNull)
-                .toList();
-    }
-
     private double scoreBeforeRound(UUID playerId, int roundNumber) {
         return rounds.stream()
                 .filter(r -> r.getNumber() < roundNumber)
@@ -294,6 +311,7 @@ public class Tournament {
                     int whiteGames = 0;
                     int blackGames = 0;
                     boolean hadBye = false;
+                    boolean forfeitWin = false;
                     int lastColor = PairingCandidate.NONE;
                     int previousColor = PairingCandidate.NONE;
                     int downFloats = 0;
@@ -313,17 +331,11 @@ public class Tournament {
                                 }
                                 continue;
                             }
-                            previousColor = lastColor;
-                            if (pairing.getWhitePlayerId().equals(playerId)) {
-                                whiteGames++;
-                                lastColor = PairingCandidate.WHITE;
-                                opponents.add(pairing.getBlackPlayerId());
-                            } else {
-                                blackGames++;
-                                lastColor = PairingCandidate.BLACK;
-                                opponents.add(pairing.getWhitePlayerId());
-                            }
+                            // Being paired counts as having met, and as a
+                            // float across score groups, even if the game
+                            // was later forfeited.
                             UUID opponentId = pairing.opponentOf(playerId);
+                            opponents.add(opponentId);
                             double myScoreBefore = scoreBeforeRound(playerId, round.getNumber());
                             double opponentScoreBefore = scoreBeforeRound(opponentId, round.getNumber());
                             if (myScoreBefore > opponentScoreBefore + 0.01) {
@@ -337,10 +349,25 @@ public class Tournament {
                                     floatedUpLastRound = true;
                                 }
                             }
+                            if (pairing.wonByForfeit(playerId)) {
+                                forfeitWin = true;
+                            }
+                            if (!pairing.isPlayed()) {
+                                // Forfeited games leave the color history untouched.
+                                continue;
+                            }
+                            previousColor = lastColor;
+                            if (pairing.getWhitePlayerId().equals(playerId)) {
+                                whiteGames++;
+                                lastColor = PairingCandidate.WHITE;
+                            } else {
+                                blackGames++;
+                                lastColor = PairingCandidate.BLACK;
+                            }
                         }
                     }
                     return new PairingCandidate(playerId, byId.get(playerId).getRating(),
-                            scoreOf(playerId), opponents, whiteGames, blackGames, hadBye,
+                            scoreOf(playerId), opponents, whiteGames, blackGames, hadBye, forfeitWin,
                             lastColor, previousColor, downFloats, upFloats,
                             floatedDownLastRound, floatedUpLastRound);
                 })

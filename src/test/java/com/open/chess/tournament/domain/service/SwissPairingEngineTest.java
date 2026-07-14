@@ -251,10 +251,13 @@ class SwissPairingEngineTest {
         UUID a = UUID.randomUUID();
         UUID b = UUID.randomUUID();
         UUID c = UUID.randomUUID();
+        // b and c share the lowest score; c floated down last round, so
+        // the bye (itself a downfloat) goes to b even though c is ranked
+        // lower.
         List<PairingCandidate> candidates = List.of(
                 candidate(a, 1800, 1.0, Set.of(), 1, 0, false,
                         PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
-                candidate(b, 1700, 0.5, Set.of(), 0, 1, false,
+                candidate(b, 1700, 0.0, Set.of(), 0, 1, false,
                         PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false),
                 candidate(c, 1600, 0.0, Set.of(), 0, 1, false,
                         PairingCandidate.BLACK, PairingCandidate.NONE, 1, 0, true, false));
@@ -286,12 +289,13 @@ class SwissPairingEngineTest {
 
         assertEquals(2, plan.boards().size());
         // Fold order would pair a (due black) with c (also due black);
-        // the color rule forces a different opponent for each of them.
-        assertPaired(plan, a, d);
-        assertPaired(plan, b, c);
+        // the color rule forces every board to mix one player due white
+        // with one due black, and each receives the due color.
         for (PairingPlan.Board board : plan.boards()) {
             assertTrue(board.whitePlayerId().equals(b) || board.whitePlayerId().equals(d),
                     "Players due white must receive white: " + board);
+            assertTrue(board.blackPlayerId().equals(a) || board.blackPlayerId().equals(c),
+                    "Players due black must receive black: " + board);
         }
     }
 
@@ -358,23 +362,73 @@ class SwissPairingEngineTest {
         UUID b = UUID.randomUUID();
         UUID c = UUID.randomUUID();
         UUID d = UUID.randomUUID();
+        // a must pair down into the 0.5 group; b upfloated last round, so
+        // c is lifted instead even though b is ranked higher. All players
+        // share the same color preference so only the float criterion
+        // separates the alternatives.
         List<PairingCandidate> candidates = List.of(
-                candidate(a, 1800, 1.0, Set.of(b), 1, 0, false,
+                candidate(a, 1800, 1.0, Set.of(), 1, 1, false,
                         PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
-                candidate(b, 1700, 1.0, Set.of(a), 0, 1, false,
-                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false),
-                candidate(c, 1600, 0.0, Set.of(), 0, 1, false,
-                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 1, false, true),
-                candidate(d, 1500, 0.0, Set.of(), 1, 0, false,
-                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 1, false, false));
+                candidate(b, 1700, 0.5, Set.of(), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 1, false, true),
+                candidate(c, 1600, 0.5, Set.of(), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(d, 1500, 0.0, Set.of(), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false));
 
         PairingPlan plan = engine.generate(candidates);
 
         assertEquals(2, plan.boards().size());
-        // a and b must both pair down; c upfloated in the previous round,
-        // so d (same upfloat count, but not in the last round) goes first.
-        assertPaired(plan, a, d);
-        assertPaired(plan, b, c);
+        assertPaired(plan, a, c);
+        assertPaired(plan, b, d);
+    }
+
+    @Test
+    void minimizesScoreDifferencesGlobally() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        UUID d = UUID.randomUUID();
+        // a cannot meet c again. Pairing a-b and c-d gives two one-point
+        // floats; pairing a-d would concentrate a two-point float on one
+        // board and must be rejected by the global optimization.
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 2.0, Set.of(c), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(b, 1700, 1.0, Set.of(), 1, 1, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(c, 1600, 1.0, Set.of(a), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(d, 1500, 0.0, Set.of(), 1, 1, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(2, plan.boards().size());
+        assertPaired(plan, a, b);
+        assertPaired(plan, c, d);
+    }
+
+    @Test
+    void byeNeverGoesToForfeitWinner() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        // c is the lowest ranked player, but won a game by forfeit and is
+        // therefore not eligible for the bye (FIDE C.04.1.d).
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 0.5, Set.of(), 1, 0, false,
+                        PairingCandidate.WHITE, 0, 0),
+                candidate(b, 1700, 0.5, Set.of(), 0, 1, false,
+                        PairingCandidate.BLACK, 0, 0),
+                new PairingCandidate(c, 1600, 0.5, Set.of(), 0, 0, false, true,
+                        PairingCandidate.NONE, PairingCandidate.NONE, 0, 0, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(b, plan.byePlayerId());
+        assertEquals(1, plan.boards().size());
+        assertPaired(plan, a, c);
     }
 
     @Test
@@ -492,7 +546,7 @@ class SwissPairingEngineTest {
                                        int whiteGames, int blackGames, boolean hadBye,
                                        int lastColor, int downFloats, int upFloats) {
         return new PairingCandidate(id, rating, score, opponents, whiteGames, blackGames, hadBye,
-                lastColor, PairingCandidate.NONE, downFloats, upFloats, false, false);
+                false, lastColor, PairingCandidate.NONE, downFloats, upFloats, false, false);
     }
 
     private PairingCandidate candidate(UUID id, int rating, double score, Set<UUID> opponents,
@@ -500,7 +554,7 @@ class SwissPairingEngineTest {
                                        int lastColor, int previousColor, int downFloats, int upFloats,
                                        boolean floatedDownLastRound, boolean floatedUpLastRound) {
         return new PairingCandidate(id, rating, score, opponents, whiteGames, blackGames, hadBye,
-                lastColor, previousColor, downFloats, upFloats,
+                false, lastColor, previousColor, downFloats, upFloats,
                 floatedDownLastRound, floatedUpLastRound);
     }
 

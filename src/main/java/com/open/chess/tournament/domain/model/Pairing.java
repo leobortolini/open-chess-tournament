@@ -52,6 +52,15 @@ public class Pairing {
         return blackPlayerId == null;
     }
 
+    public boolean isPlayed() {
+        return result.isPlayedGame();
+    }
+
+    public boolean wonByForfeit(UUID playerId) {
+        return (result == GameResult.WHITE_WINS_FORFEIT && whitePlayerId.equals(playerId))
+                || (result == GameResult.BLACK_WINS_FORFEIT && playerId.equals(blackPlayerId));
+    }
+
     public boolean involves(UUID playerId) {
         return whitePlayerId.equals(playerId) || playerId.equals(blackPlayerId);
     }
@@ -67,9 +76,9 @@ public class Pairing {
         return switch (result) {
             case BYE -> 1.0;
             case DRAW -> 0.5;
-            case WHITE_WINS -> whitePlayerId.equals(playerId) ? 1.0 : 0.0;
-            case BLACK_WINS -> playerId.equals(blackPlayerId) ? 1.0 : 0.0;
-            case PENDING -> 0.0;
+            case WHITE_WINS, WHITE_WINS_FORFEIT -> whitePlayerId.equals(playerId) ? 1.0 : 0.0;
+            case BLACK_WINS, BLACK_WINS_FORFEIT -> playerId.equals(blackPlayerId) ? 1.0 : 0.0;
+            case PENDING, DOUBLE_FORFEIT -> 0.0;
         };
     }
 

@@ -11,6 +11,7 @@ public record PairingCandidate(
         int whiteGames,
         int blackGames,
         boolean hadBye,
+        boolean forfeitWin,
         int lastColor,
         int previousColor,
         int downFloats,
@@ -31,8 +32,17 @@ public record PairingCandidate(
     }
 
     /**
+     * FIDE C.04.1.d: a player who has already received a pairing-allocated
+     * bye, or won a game by forfeit, shall not receive the bye.
+     */
+    public boolean eligibleForBye() {
+        return !hadBye && !forfeitWin;
+    }
+
+    /**
      * Due color: the one that restores the white/black balance, or the
-     * alternate of the last color when the balance is even.
+     * alternate of the last color when the balance is even. Only played
+     * games count: byes and forfeits leave the color history untouched.
      */
     public int colorPreference() {
         if (colorBalance() > 0) {
@@ -51,5 +61,9 @@ public record PairingCandidate(
     public boolean hasAbsoluteColorPreference() {
         return Math.abs(colorBalance()) >= 2
                 || (lastColor != NONE && lastColor == previousColor);
+    }
+
+    public boolean hasStrongColorPreference() {
+        return Math.abs(colorBalance()) >= 1 || hasAbsoluteColorPreference();
     }
 }
