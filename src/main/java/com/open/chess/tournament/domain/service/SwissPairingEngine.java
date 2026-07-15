@@ -134,9 +134,8 @@ public class SwissPairingEngine {
         PairingCandidate higher = ranked.get(i);
         PairingCandidate lower = ranked.get(j);
         double cost = 0.0;
+        boolean samePreference = higher.colorPreference() != PairingCandidate.NONE && higher.colorPreference() == lower.colorPreference();
 
-        boolean samePreference = higher.colorPreference() != PairingCandidate.NONE
-                && higher.colorPreference() == lower.colorPreference();
         if (samePreference && higher.hasAbsoluteColorPreference() && lower.hasAbsoluteColorPreference()) {
             cost += COST_SAME_ABSOLUTE_COLOR;
         } else if (samePreference) {
@@ -147,6 +146,7 @@ public class SwissPairingEngine {
         }
 
         int doubledDiff = (int) Math.round((higher.score() - lower.score()) * 2);
+
         if (doubledDiff > 0) {
             cost += COST_SCORE_DIFF_UNIT * Math.min(doubledDiff * doubledDiff, SCORE_DIFF_CAP);
             if (higher.floatedDownLastRound()) {
@@ -211,8 +211,7 @@ public class SwissPairingEngine {
         if (lower.hasAbsoluteColorPreference()) {
             return lowerPref == PairingCandidate.WHITE ? higherBlack : higherWhite;
         }
-        return shouldHigherGetWhite(higher, lower, higherPref, lowerPref, boardIndex)
-                ? higherWhite : higherBlack;
+        return shouldHigherGetWhite(higher, lower, higherPref, lowerPref, boardIndex) ? higherWhite : higherBlack;
     }
 
     private boolean shouldHigherGetWhite(PairingCandidate higher, PairingCandidate lower,
