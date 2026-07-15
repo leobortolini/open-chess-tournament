@@ -44,7 +44,7 @@ import java.util.UUID;
  * faithful weighted approximation beyond that. If the graph has no
  * perfect matching, no legal round exists and a domain error is raised.
  */
-public class SwissPairingEngine {
+public class SwissPairingEngine implements PairingEngine {
 
     private static final double COST_SAME_ABSOLUTE_COLOR = 6e9;
     private static final double COST_SCORE_DIFF_UNIT = 5e6;
@@ -56,6 +56,7 @@ public class SwissPairingEngine {
     private static final int FOLD_DEVIATION_CAP = 10;
     private static final int UPFLOAT_POSITION_CAP = 10;
 
+    @Override
     public PairingPlan generate(List<PairingCandidate> candidates) {
         if (candidates.size() < 2) {
             throw new NoPairingPossibleException("At least two active players are required to pair a round");

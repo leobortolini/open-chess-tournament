@@ -28,23 +28,30 @@ import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * Round-by-round comparison against JaVaFo, the FIDE reference pairing
- * implementation, over simulated tournaments (with draws, decisive games
- * and occasional forfeits). Each round is exported as a TRF and JaVaFo is
- * asked to pair the same position this engine pairs.
-
+ * Round-by-round comparison against bbpPairings, the FIDE-endorsed Swiss
+ * pairing engine that uses weighted perfect matching (Blossom), over
+ * simulated tournaments (with draws, decisive games and occasional
+ * forfeits). Each round is exported as a TRF and bbpPairings is asked
+ * to pair the same position these engines pair.
+ *
+ * {@link SwissPairingEngine} shares the weighted-matching architecture
+ * with bbpPairings, so agreement is expected to be high. The
+ * {@link BracketSwissPairingEngine} follows the literal Dutch bracket
+ * procedure and may diverge on tie-breaking choices.
+ *
  * First-round pairings (pure fold with alternating colors) must match
- * JaVaFo exactly. Later rounds are dominated by the same criteria but the
- * Dutch rules leave tie-breaking choices (transpositions, exchanges) that
- * only a bit-exact reimplementation reproduces, so agreement is asserted
- * against a measured floor and every divergence is printed for review.
-
- * Requires tools/javafo/javafo.jar (see tools/javafo/README.md); the test
- * is skipped when the jar is not present.
+ * bbpPairings exactly. Later rounds are dominated by the same criteria
+ * but implementation differences leave tie-breaking choices that only a
+ * bit-exact reimplementation reproduces, so agreement is asserted against
+ * a measured floor and every divergence is printed for review.
+ *
+ * Requires tools/bbppairings/bbpPairings.exe (see
+ * tools/bbppairings/README.md); the test is skipped when the executable
+ * is not present.
  */
-class JaVaFoComparisonTest {
+class BbpPairingsComparisonTest {
 
-    private static final Path JAVAFO_JAR = Path.of("tools", "javafo", "javafo.jar");
+    private static final Path BBP_EXECUTABLE = Path.of("tools", "bbppairings", "bbpPairings.exe");
     private static final int TOURNAMENTS = 100;
     private static final int ROUNDS = 5;
     private static final double MINIMUM_AGREEMENT = 0.55;
@@ -52,35 +59,51 @@ class JaVaFoComparisonTest {
     private final TrfExporter exporter = new TrfExporter();
 
     @Test
-    void pairingsTrackJavafoAcrossSimulatedTournaments() throws Exception {
-        assumeTrue(Files.exists(JAVAFO_JAR), "tools/javafo/javafo.jar not present; skipping");
+    void swissEngineTracksBbpPairingsAcrossSimulatedTournaments() throws Exception {
+        assumeTrue(Files.exists(BBP_EXECUTABLE), BBP_EXECUTABLE + " not present; skipping");
 
         Agreement agreement = measure(new SwissPairingEngine(), true);
 
-        assertEquals(0, agreement.firstRoundMismatches, "First-round pairings must match JaVaFo exactly");
-        assertEquals(0, agreement.failures, "Every simulated round must be pairable");
+        assertEquals(0, agreement.firstRoundMismatches,
+                "First-round pairings must match bbpPairings exactly");
+        assertEquals(0, agreement.failures,
+                "Every simulated round must be pairable");
         double rate = agreement.exact / (double) agreement.rounds;
         assertTrue(rate >= MINIMUM_AGREEMENT, String.format(
-                "Agreement with JaVaFo dropped to %.0f%% (%d/%d); inspect divergences above",
+                "Agreement with bbpPairings dropped to %.0f%% (%d/%d); inspect divergences above",
+                rate * 100, agreement.exact, agreement.rounds));
+    }
+
+    @Test
+    void bracketEngineTracksBbpPairingsAcrossSimulatedTournaments() throws Exception {
+        assumeTrue(Files.exists(BBP_EXECUTABLE), BBP_EXECUTABLE + " not present; skipping");
+
+        Agreement agreement = measure(new BracketSwissPairingEngine(), true);
+
+        assertEquals(0, agreement.firstRoundMismatches,
+                "First-round pairings must match bbpPairings exactly");
+        assertEquals(0, agreement.failures,
+                "Every simulated round must be pairable");
+        double rate = agreement.exact / (double) agreement.rounds;
+        assertTrue(rate >= MINIMUM_AGREEMENT, String.format(
+                "Agreement with bbpPairings dropped to %.0f%% (%d/%d); inspect divergences above",
                 rate * 100, agreement.exact, agreement.rounds));
     }
 
     /**
-     * Experiment: the FIDE rules are written as a sequential bracket
-     * procedure, so a bracket engine should track JaVaFo more closely than
-     * a single global optimisation. The bracket engine's completion
-     * look-ahead makes "no legal round" impossible whenever JaVaFo can
-     * pair, so failures are asserted; the agreement rates are reported to
-     * measure the gap between the two architectures.
+     * Side-by-side comparison of both engines against bbpPairings.
+     * Since bbpPairings uses weighted matching like
+     * {@link SwissPairingEngine}, the global engine typically agrees more
+     * often; the bracket engine may diverge on tie-breaking choices.
      */
     @Test
-    void bracketEngineTracksJavafoAtLeastAsCloselyAsGlobalMatching() throws Exception {
-        assumeTrue(Files.exists(JAVAFO_JAR), "tools/javafo/javafo.jar not present; skipping");
+    void bothEnginesComparedAgainstBbpPairings() throws Exception {
+        assumeTrue(Files.exists(BBP_EXECUTABLE), BBP_EXECUTABLE + " not present; skipping");
 
         Agreement global = measure(new SwissPairingEngine(), false);
         Agreement bracket = measure(new BracketSwissPairingEngine(), false);
 
-        System.out.printf("%n=== Architecture experiment over %d rounds ===%n", global.rounds);
+        System.out.printf("%n=== bbpPairings comparison over %d rounds ===%n", global.rounds);
         System.out.printf("  global matching : %3d/%d identical (%.0f%%), %d color-identical, %d unpairable%n",
                 global.exact, global.rounds, 100.0 * global.exact / global.rounds,
                 global.colorExact, global.failures);
@@ -89,9 +112,9 @@ class JaVaFoComparisonTest {
                 bracket.colorExact, bracket.failures);
 
         assertEquals(0, bracket.failures,
-                "The completion look-ahead must pair every position JaVaFo pairs");
+                "The completion look-ahead must pair every position bbpPairings pairs");
         assertEquals(0, bracket.firstRoundMismatches,
-                "First-round pairings must match JaVaFo exactly");
+                "First-round pairings must match bbpPairings exactly");
     }
 
     private record Agreement(int rounds, int exact, int colorExact,
@@ -117,14 +140,14 @@ class JaVaFoComparisonTest {
             Random random = new Random(seed * 1000L);
 
             for (int r = 1; r <= ROUNDS; r++) {
-                List<int[]> javafo = runJavafo(exporter.export(tournament), seed, r);
+                List<int[]> bbp = runBbpPairings(exporter.export(tournament), seed, r);
                 Optional<Round> generated = tournament.generateNextRound(engine);
                 if (generated.isEmpty()) {
-                    // JaVaFo paired this position, so a legal round exists.
                     failures++;
                     roundsCompared++;
                     divergences.add(String.format(
-                            "Sim%d round %d: our engine found no legal round; javafo=%s", seed, r, format(javafo)));
+                            "Sim%d round %d: our engine found no legal round; bbp=%s",
+                            seed, r, format(bbp)));
                     break;
                 }
                 Round round = generated.get();
@@ -145,11 +168,12 @@ class JaVaFoComparisonTest {
                 Set<String> theirPairs = new TreeSet<>();
                 Set<String> theirBoards = new TreeSet<>();
                 int theirBye = 0;
-                for (int[] pair : javafo) {
+                for (int[] pair : bbp) {
                     if (pair[1] == 0) {
                         theirBye = pair[0];
                     } else {
-                        theirPairs.add(Math.min(pair[0], pair[1]) + "-" + Math.max(pair[0], pair[1]));
+                        theirPairs.add(Math.min(pair[0], pair[1])
+                                + "-" + Math.max(pair[0], pair[1]));
                         theirBoards.add(pair[0] + "v" + pair[1]);
                     }
                 }
@@ -166,7 +190,7 @@ class JaVaFoComparisonTest {
                         firstRoundMismatches++;
                     }
                     divergences.add(String.format(
-                            "Sim%d round %d: ours=%s bye=%d | javafo=%s bye=%d",
+                            "Sim%d round %d: ours=%s bye=%d | bbp=%s bye=%d",
                             seed, r, ourPairs, ourBye, theirPairs, theirBye));
                 }
 
@@ -179,15 +203,16 @@ class JaVaFoComparisonTest {
         }
 
         if (printDivergences) {
-            System.out.printf("JaVaFo agreement: %d/%d rounds identical, %d also color-identical%n",
+            System.out.printf("bbpPairings agreement: %d/%d rounds identical, %d also color-identical%n",
                     exactMatches, roundsCompared, colorMatches);
             divergences.forEach(System.out::println);
         }
-        return new Agreement(roundsCompared, exactMatches, colorMatches, firstRoundMismatches, failures);
+        return new Agreement(roundsCompared, exactMatches, colorMatches,
+                firstRoundMismatches, failures);
     }
 
-    private String format(List<int[]> javafo) {
-        return javafo.stream()
+    private String format(List<int[]> bbp) {
+        return bbp.stream()
                 .map(pair -> pair[0] + "-" + pair[1])
                 .sorted()
                 .toList()
@@ -223,21 +248,29 @@ class JaVaFoComparisonTest {
         return GameResult.BLACK_WINS;
     }
 
-    /** Runs JaVaFo on a TRF and returns [white, black] pairs; the bye comes back as [player, 0]. */
-    private List<int[]> runJavafo(String trf, int seed, int round) throws IOException, InterruptedException {
-        Path input = Files.createTempFile("javafo-sim" + seed + "-r" + round, ".trfx");
-        Path output = Files.createTempFile("javafo-sim" + seed + "-r" + round, ".out");
+    /**
+     * Runs bbpPairings on a TRF and returns [white, black] pairs;
+     * the bye comes back as [player, 0].
+     */
+    private List<int[]> runBbpPairings(String trf, int seed, int round)
+            throws IOException, InterruptedException {
+        Path input = Files.createTempFile("bbp-sim" + seed + "-r" + round, ".trfx");
+        Path output = Files.createTempFile("bbp-sim" + seed + "-r" + round, ".out");
         try {
             Files.writeString(input, trf);
+            String executable = BBP_EXECUTABLE.toAbsolutePath().toString();
             Process process = new ProcessBuilder(
-                    "java", "-jar", JAVAFO_JAR.toAbsolutePath().toString(),
-                    input.toAbsolutePath().toString(), "-p", output.toAbsolutePath().toString())
+                    executable, "--dutch",
+                    input.toAbsolutePath().toString(),
+                    "-p", output.toAbsolutePath().toString())
                     .redirectErrorStream(true)
                     .start();
             String log = new String(process.getInputStream().readAllBytes());
             if (!process.waitFor(30, TimeUnit.SECONDS) || process.exitValue() != 0) {
                 process.destroyForcibly();
-                fail("JaVaFo failed on sim " + seed + " round " + round + ":\n" + log + "\nTRF:\n" + trf);
+                fail("bbpPairings failed on sim " + seed + " round " + round
+                        + " (exit " + process.exitValue() + "):\n" + log
+                        + "\nTRF:\n" + trf);
             }
             List<String> lines = Files.readAllLines(output);
             List<int[]> pairs = new ArrayList<>();
@@ -246,10 +279,11 @@ class JaVaFoComparisonTest {
                     continue;
                 }
                 String[] parts = line.trim().split("\\s+");
-                pairs.add(new int[]{Integer.parseInt(parts[0]), Integer.parseInt(parts[1])});
+                pairs.add(new int[]{Integer.parseInt(parts[0]),
+                        Integer.parseInt(parts[1])});
             }
             assertEquals(Integer.parseInt(lines.getFirst().trim()), pairs.size(),
-                    "JaVaFo output header does not match its pair count");
+                    "bbpPairings output header does not match its pair count");
             return pairs;
         } finally {
             Files.deleteIfExists(input);

@@ -4,14 +4,19 @@ import com.open.chess.tournament.domain.exception.NoPairingPossibleException;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -684,6 +689,240 @@ class SwissPairingEngineTest {
         assertEquals(2, plan.boards().size());
         assertPaired(plan, a, b);
         assertPaired(plan, c, d);
+    }
+
+    @Test
+    void sixtyFourPlayersFirstRoundUsesExactFoldPairing() {
+        List<UUID> byRank = new ArrayList<>();
+        List<PairingCandidate> candidates = new ArrayList<>();
+        for (int i = 0; i < 64; i++) {
+            UUID id = UUID.randomUUID();
+            byRank.add(id);
+            candidates.add(candidate(id, 2000 - i, 0.0, Set.of(), 0, 0, false));
+        }
+        // The engine ranks its input itself; feeding it shuffled proves the
+        // fold below comes from the ranking, not from the insertion order.
+        Collections.shuffle(candidates, new Random(64));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(32, plan.boards().size());
+        assertNull(plan.byePlayerId());
+        // 64 is the largest field with a strictly lexicographic tier
+        // separation, and the fold (1v33, 2v34, ... 32v64) is the unique
+        // zero-cost matching, so the whole round is pinned exactly.
+        for (int board = 0; board < 32; board++) {
+            UUID top = byRank.get(board);
+            UUID bottom = byRank.get(board + 32);
+            PairingPlan.Board actual = plan.boards().get(board);
+            if (board % 2 == 0) {
+                assertEquals(top, actual.whitePlayerId(), "board " + board);
+                assertEquals(bottom, actual.blackPlayerId(), "board " + board);
+            } else {
+                assertEquals(bottom, actual.whitePlayerId(), "board " + board);
+                assertEquals(top, actual.blackPlayerId(), "board " + board);
+            }
+        }
+    }
+
+    @Test
+    void absoluteColorRuleOutranksScoreDifferencesAcrossSixtyFourPlayers() {
+        List<PairingCandidate> candidates = new ArrayList<>();
+        Set<UUID> dueWhite = new HashSet<>();
+        Set<UUID> dueBlack = new HashSet<>();
+        for (int i = 0; i < 32; i++) {
+            UUID white = UUID.randomUUID();
+            dueWhite.add(white);
+            candidates.add(candidate(white, 2000 - i, 1.0, Set.of(), 0, 2, false));
+            UUID black = UUID.randomUUID();
+            dueBlack.add(black);
+            candidates.add(candidate(black, 1900 - i, 0.0, Set.of(), 2, 0, false));
+        }
+
+        PairingPlan plan = engine.generate(candidates);
+
+        // Pairing inside the score groups would cost nothing in score
+        // difference but would put two players due the same absolute color
+        // on all 32 boards. The engine must instead float every board by a
+        // full point, because one absolute color violation outweighs every
+        // score difference a 32-board round can accumulate.
+        assertEquals(32, plan.boards().size());
+        for (PairingPlan.Board board : plan.boards()) {
+            assertTrue(dueWhite.contains(board.whitePlayerId()),
+                    "Player due white did not get white: " + board);
+            assertTrue(dueBlack.contains(board.blackPlayerId()),
+                    "Player due black did not get black: " + board);
+        }
+    }
+
+    @Test
+    void sixtyFourPlayersMinimizeUnavoidableColorConflicts() {
+        List<PairingCandidate> candidates = new ArrayList<>();
+        Set<UUID> dueWhite = new HashSet<>();
+        Set<UUID> dueBlack = new HashSet<>();
+        // 34 players due white against 30 due black, all on the same score:
+        // at least two boards must pair two players due the same absolute
+        // color, so the relaxation path is forced at full scale. Several
+        // relaxed boards push the chosen matching's total weight past the
+        // Blossom V 1e10 threshold, which must stay a per-edge bound.
+        for (int i = 0; i < 34; i++) {
+            UUID id = UUID.randomUUID();
+            dueWhite.add(id);
+            candidates.add(candidate(id, 2000 - i, 1.0, Set.of(), 0, 2, false));
+        }
+        for (int i = 0; i < 30; i++) {
+            UUID id = UUID.randomUUID();
+            dueBlack.add(id);
+            candidates.add(candidate(id, 1900 - i, 1.0, Set.of(), 2, 0, false));
+        }
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(32, plan.boards().size());
+        int conflicted = 0;
+        for (PairingPlan.Board board : plan.boards()) {
+            boolean bothDueWhite = dueWhite.contains(board.whitePlayerId())
+                    && dueWhite.contains(board.blackPlayerId());
+            boolean bothDueBlack = dueBlack.contains(board.whitePlayerId())
+                    && dueBlack.contains(board.blackPlayerId());
+            assertFalse(bothDueBlack, "Two players due black were paired while due-white players were spare");
+            if (bothDueWhite) {
+                conflicted++;
+            }
+        }
+        assertEquals(2, conflicted, "Engine must relax the color rule on the fewest boards possible");
+    }
+
+    @Test
+    void sixtyFourPlayersPairEveryRoundWithinTimeBudget() {
+        Map<UUID, PlayerState> states = new LinkedHashMap<>();
+        for (int i = 0; i < 64; i++) {
+            UUID id = UUID.randomUUID();
+            states.put(id, new PlayerState(id, 2400 - i * 10));
+        }
+        Random random = new Random(64);
+
+        System.out.println("Pairing time for 64 players — one shot per round, indicative only "
+                + "(round 1 carries the JIT warm-up when this test runs on its own)");
+        for (int round = 1; round <= 7; round++) {
+            List<PairingCandidate> candidates = states.values().stream()
+                    .map(PlayerState::toCandidate)
+                    .toList();
+
+            long startedAt = System.nanoTime();
+            PairingPlan plan = engine.generate(candidates);
+            long elapsedNanos = System.nanoTime() - startedAt;
+
+            System.out.printf("  round %d: %4d edges, %7.2f ms%n",
+                    round, countEdges(candidates), elapsedNanos / 1_000_000.0);
+
+            assertEquals(32, plan.boards().size(), "round " + round);
+            assertNull(plan.byePlayerId(), "an even field never takes a bye");
+            Set<UUID> seen = new HashSet<>();
+            for (PairingPlan.Board board : plan.boards()) {
+                assertTrue(seen.add(board.whitePlayerId()), "round " + round);
+                assertTrue(seen.add(board.blackPlayerId()), "round " + round);
+                assertFalse(states.get(board.whitePlayerId()).opponents.contains(board.blackPlayerId()),
+                        "rematch in round " + round);
+            }
+            // Blossom V on 64 vertices is milliseconds' work; this budget only
+            // fires on an algorithmic regression, never on a loaded machine.
+            assertTrue(elapsedNanos < TimeUnit.SECONDS.toNanos(5),
+                    "round " + round + " took " + elapsedNanos / 1_000_000 + " ms");
+
+            applyRound(states, plan, random);
+        }
+    }
+
+    private int countEdges(List<PairingCandidate> candidates) {
+        int edges = 0;
+        for (int i = 0; i < candidates.size(); i++) {
+            for (int j = i + 1; j < candidates.size(); j++) {
+                if (!candidates.get(i).hasPlayed(candidates.get(j).playerId())) {
+                    edges++;
+                }
+            }
+        }
+        return edges;
+    }
+
+    /** Plays out a round with random results and rolls the player states forward. */
+    private void applyRound(Map<UUID, PlayerState> states, PairingPlan plan, Random random) {
+        Map<UUID, Double> scoreBefore = new HashMap<>();
+        states.values().forEach(state -> {
+            scoreBefore.put(state.id, state.score);
+            state.floatedDownLastRound = false;
+            state.floatedUpLastRound = false;
+        });
+
+        for (PairingPlan.Board board : plan.boards()) {
+            PlayerState white = states.get(board.whitePlayerId());
+            PlayerState black = states.get(board.blackPlayerId());
+
+            white.opponents.add(black.id);
+            black.opponents.add(white.id);
+
+            double whiteBefore = scoreBefore.get(white.id);
+            double blackBefore = scoreBefore.get(black.id);
+            if (whiteBefore > blackBefore + 0.01) {
+                white.downFloats++;
+                white.floatedDownLastRound = true;
+                black.upFloats++;
+                black.floatedUpLastRound = true;
+            } else if (blackBefore > whiteBefore + 0.01) {
+                black.downFloats++;
+                black.floatedDownLastRound = true;
+                white.upFloats++;
+                white.floatedUpLastRound = true;
+            }
+
+            int roll = random.nextInt(100);
+            if (roll < 30) {
+                white.score += 0.5;
+                black.score += 0.5;
+            } else if (roll < 70) {
+                white.score += 1.0;
+            } else {
+                black.score += 1.0;
+            }
+
+            white.previousColor = white.lastColor;
+            white.lastColor = PairingCandidate.WHITE;
+            white.whiteGames++;
+            black.previousColor = black.lastColor;
+            black.lastColor = PairingCandidate.BLACK;
+            black.blackGames++;
+        }
+    }
+
+    /**
+     * Mutable mirror of what {@code Tournament} derives from its rounds, so
+     * the engine can be driven across rounds without the aggregate.
+     */
+    private static final class PlayerState {
+        private final UUID id;
+        private final int rating;
+        private final Set<UUID> opponents = new HashSet<>();
+        private double score;
+        private int whiteGames;
+        private int blackGames;
+        private int lastColor = PairingCandidate.NONE;
+        private int previousColor = PairingCandidate.NONE;
+        private int downFloats;
+        private int upFloats;
+        private boolean floatedDownLastRound;
+        private boolean floatedUpLastRound;
+
+        private PlayerState(UUID id, int rating) {
+            this.id = id;
+            this.rating = rating;
+        }
+
+        private PairingCandidate toCandidate() {
+            return new PairingCandidate(id, rating, score, Set.copyOf(opponents),
+                    whiteGames, blackGames, false, false, lastColor, previousColor,
+                    downFloats, upFloats, floatedDownLastRound, floatedUpLastRound);
+        }
     }
 
     private PairingCandidate candidate(UUID id, int rating, double score, Set<UUID> opponents,

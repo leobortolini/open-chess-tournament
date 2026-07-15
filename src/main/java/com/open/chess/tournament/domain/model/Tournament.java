@@ -4,8 +4,8 @@ import com.open.chess.tournament.domain.exception.DomainException;
 import com.open.chess.tournament.domain.exception.NoPairingPossibleException;
 import com.open.chess.tournament.domain.exception.NotFoundException;
 import com.open.chess.tournament.domain.service.PairingCandidate;
+import com.open.chess.tournament.domain.service.PairingEngine;
 import com.open.chess.tournament.domain.service.PairingPlan;
-import com.open.chess.tournament.domain.service.SwissPairingEngine;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -90,7 +90,7 @@ public class Tournament {
      * Generates the next round, or finishes the tournament and returns
      * empty when no rematch-free pairing is possible.
      */
-    public Optional<Round> generateNextRound(SwissPairingEngine engine) {
+    public Optional<Round> generateNextRound(PairingEngine engine) {
         if (status != TournamentStatus.IN_PROGRESS) {
             throw new DomainException("Rounds can only be generated while the tournament is in progress");
         }
