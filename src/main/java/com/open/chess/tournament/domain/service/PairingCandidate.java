@@ -17,7 +17,9 @@ public record PairingCandidate(
         int downFloats,
         int upFloats,
         boolean floatedDownLastRound,
-        boolean floatedUpLastRound) {
+        boolean floatedUpLastRound,
+        boolean floatedDownTwoRoundsAgo,
+        boolean floatedUpTwoRoundsAgo) {
 
     public static final int WHITE = 1;
     public static final int BLACK = -1;

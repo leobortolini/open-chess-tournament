@@ -318,8 +318,11 @@ public class Tournament {
                     int upFloats = 0;
                     boolean floatedDownLastRound = false;
                     boolean floatedUpLastRound = false;
+                    boolean floatedDownTwoRoundsAgo = false;
+                    boolean floatedUpTwoRoundsAgo = false;
                     for (Round round : rounds) {
                         boolean isLastRound = round.getNumber() == lastRoundNumber;
+                        boolean isTwoRoundsAgo = round.getNumber() == lastRoundNumber - 1;
                         for (Pairing pairing : round.getPairings()) {
                             if (!pairing.involves(playerId)) {
                                 continue;
@@ -329,12 +332,34 @@ public class Tournament {
                                 if (isLastRound) {
                                     floatedDownLastRound = true;
                                 }
+                                if (isTwoRoundsAgo) {
+                                    floatedDownTwoRoundsAgo = true;
+                                }
                                 continue;
                             }
-                            // Being paired counts as having met, and as a
-                            // float across score groups, even if the game
-                            // was later forfeited.
                             UUID opponentId = pairing.opponentOf(playerId);
+                            if (pairing.wonByForfeit(playerId)) {
+                                forfeitWin = true;
+                            }
+                            if (!pairing.isPlayed()) {
+                                // FIDE float semantics (as bbpPairings derives
+                                // them from the TRF): an unplayed game counts
+                                // as a downfloat when it scored points, and
+                                // never floats by score comparison. Forfeits
+                                // also leave the color history untouched.
+                                if (pairing.pointsFor(playerId) > 0) {
+                                    downFloats++;
+                                    if (isLastRound) {
+                                        floatedDownLastRound = true;
+                                    }
+                                    if (isTwoRoundsAgo) {
+                                        floatedDownTwoRoundsAgo = true;
+                                    }
+                                }
+                                continue;
+                            }
+                            // C.1 counts only games actually played: a
+                            // pairing decided by forfeit may be repeated.
                             opponents.add(opponentId);
                             double myScoreBefore = scoreBeforeRound(playerId, round.getNumber());
                             double opponentScoreBefore = scoreBeforeRound(opponentId, round.getNumber());
@@ -343,18 +368,17 @@ public class Tournament {
                                 if (isLastRound) {
                                     floatedDownLastRound = true;
                                 }
+                                if (isTwoRoundsAgo) {
+                                    floatedDownTwoRoundsAgo = true;
+                                }
                             } else if (opponentScoreBefore > myScoreBefore + 0.01) {
                                 upFloats++;
                                 if (isLastRound) {
                                     floatedUpLastRound = true;
                                 }
-                            }
-                            if (pairing.wonByForfeit(playerId)) {
-                                forfeitWin = true;
-                            }
-                            if (!pairing.isPlayed()) {
-                                // Forfeited games leave the color history untouched.
-                                continue;
+                                if (isTwoRoundsAgo) {
+                                    floatedUpTwoRoundsAgo = true;
+                                }
                             }
                             previousColor = lastColor;
                             if (pairing.getWhitePlayerId().equals(playerId)) {
@@ -369,7 +393,8 @@ public class Tournament {
                     return new PairingCandidate(playerId, byId.get(playerId).getRating(),
                             scoreOf(playerId), opponents, whiteGames, blackGames, hadBye, forfeitWin,
                             lastColor, previousColor, downFloats, upFloats,
-                            floatedDownLastRound, floatedUpLastRound);
+                            floatedDownLastRound, floatedUpLastRound,
+                            floatedDownTwoRoundsAgo, floatedUpTwoRoundsAgo);
                 })
                 .toList();
     }

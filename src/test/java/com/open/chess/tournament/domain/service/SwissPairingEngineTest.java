@@ -427,7 +427,7 @@ class SwissPairingEngineTest {
                 candidate(b, 1700, 0.5, Set.of(), 0, 1, false,
                         PairingCandidate.BLACK, 0, 0),
                 new PairingCandidate(c, 1600, 0.5, Set.of(), 0, 0, false, true,
-                        PairingCandidate.NONE, PairingCandidate.NONE, 0, 0, false, false));
+                        PairingCandidate.NONE, PairingCandidate.NONE, 0, 0, false, false, false, false));
 
         PairingPlan plan = engine.generate(candidates);
 
@@ -921,7 +921,7 @@ class SwissPairingEngineTest {
         private PairingCandidate toCandidate() {
             return new PairingCandidate(id, rating, score, Set.copyOf(opponents),
                     whiteGames, blackGames, false, false, lastColor, previousColor,
-                    downFloats, upFloats, floatedDownLastRound, floatedUpLastRound);
+                    downFloats, upFloats, floatedDownLastRound, floatedUpLastRound, false, false);
         }
     }
 
@@ -935,7 +935,7 @@ class SwissPairingEngineTest {
                                        int whiteGames, int blackGames, boolean hadBye,
                                        int lastColor, int downFloats, int upFloats) {
         return new PairingCandidate(id, rating, score, opponents, whiteGames, blackGames, hadBye,
-                false, lastColor, PairingCandidate.NONE, downFloats, upFloats, false, false);
+                false, lastColor, PairingCandidate.NONE, downFloats, upFloats, false, false, false, false);
     }
 
     private PairingCandidate candidate(UUID id, int rating, double score, Set<UUID> opponents,
@@ -944,7 +944,7 @@ class SwissPairingEngineTest {
                                        boolean floatedDownLastRound, boolean floatedUpLastRound) {
         return new PairingCandidate(id, rating, score, opponents, whiteGames, blackGames, hadBye,
                 false, lastColor, previousColor, downFloats, upFloats,
-                floatedDownLastRound, floatedUpLastRound);
+                floatedDownLastRound, floatedUpLastRound, false, false);
     }
 
     private void assertPaired(PairingPlan plan, UUID one, UUID other) {
