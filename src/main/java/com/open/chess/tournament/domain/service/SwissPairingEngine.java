@@ -201,47 +201,36 @@ public class SwissPairingEngine {
     private Board assignColors(PairingCandidate higher, PairingCandidate lower, int boardIndex) {
         int higherPref = higher.colorPreference();
         int lowerPref = lower.colorPreference();
-        boolean higherAbsolute = higher.hasAbsoluteColorPreference();
-        boolean lowerAbsolute = lower.hasAbsoluteColorPreference();
 
         Board higherWhite = new Board(higher.playerId(), lower.playerId());
         Board higherBlack = new Board(lower.playerId(), higher.playerId());
-        Board higherChoice = higherPref == PairingCandidate.WHITE ? higherWhite : higherBlack;
 
-        if (higherAbsolute && lowerAbsolute) {
-            // Opposite preferences satisfy both; equal preferences only
-            // happen when the color rule had to be relaxed, and then the
-            // higher ranked player's preference prevails.
-            return higherChoice;
+        if (higher.hasAbsoluteColorPreference()) {
+            return higherPref == PairingCandidate.WHITE ? higherWhite : higherBlack;
         }
-        if (higherAbsolute) {
-            return higherChoice;
-        }
-        if (lowerAbsolute) {
+        if (lower.hasAbsoluteColorPreference()) {
             return lowerPref == PairingCandidate.WHITE ? higherBlack : higherWhite;
         }
+        return shouldHigherGetWhite(higher, lower, higherPref, lowerPref, boardIndex)
+                ? higherWhite : higherBlack;
+    }
 
-        if (higher.colorBalance() < lower.colorBalance()) {
-            return higherWhite;
-        }
-        if (lower.colorBalance() < higher.colorBalance()) {
-            return higherBlack;
-        }
+    private boolean shouldHigherGetWhite(PairingCandidate higher, PairingCandidate lower,
+                                          int higherPref, int lowerPref, int boardIndex) {
+        int balanceDiff = higher.colorBalance() - lower.colorBalance();
 
-        if (higher.lastColor() == PairingCandidate.BLACK && lower.lastColor() == PairingCandidate.WHITE) {
-            return higherWhite;
-        }
-        if (higher.lastColor() == PairingCandidate.WHITE && lower.lastColor() == PairingCandidate.BLACK) {
-            return higherBlack;
+        if (balanceDiff != 0) {
+            return balanceDiff < 0;
         }
 
-        if (higher.lastColor() == PairingCandidate.NONE && lower.lastColor() == PairingCandidate.NONE) {
-            // First round: alternate colors down the boards.
-            return boardIndex % 2 == 0 ? higherWhite : higherBlack;
-        }
-        if (higherPref == PairingCandidate.NONE) {
-            return lowerPref == PairingCandidate.WHITE ? higherBlack : higherWhite;
-        }
-        return higherChoice;
+        int higherLast = higher.lastColor();
+        int lowerLast = lower.lastColor();
+
+        if (higherLast == PairingCandidate.BLACK && lowerLast == PairingCandidate.WHITE) return true;
+        if (higherLast == PairingCandidate.WHITE && lowerLast == PairingCandidate.BLACK) return false;
+        if (higherLast == PairingCandidate.NONE && lowerLast == PairingCandidate.NONE) return boardIndex % 2 == 0;
+        if (higherPref == PairingCandidate.NONE) return lowerPref != PairingCandidate.WHITE;
+
+        return higherPref == PairingCandidate.WHITE;
     }
 }
