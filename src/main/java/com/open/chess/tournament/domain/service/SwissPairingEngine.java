@@ -58,6 +58,9 @@ public class SwissPairingEngine {
         if (candidates.size() < 2) {
             throw new NoPairingPossibleException("At least two active players are required to pair a round");
         }
+        //TODO: Check whether we need to sort using the tournament's tie-breaking criteria instead of rating, after sorting by score.
+        //      If so, we will need to make some changes to retrieve this information, which is not accessible (so far) in PairingCandidate.
+        //      I think we can just add the new attribute, but I'm not sure right now
         List<PairingCandidate> ranked = candidates.stream()
                 .sorted(Comparator
                         .comparingDouble(PairingCandidate::score).reversed()
