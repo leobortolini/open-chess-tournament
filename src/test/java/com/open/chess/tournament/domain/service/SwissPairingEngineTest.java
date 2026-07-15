@@ -518,6 +518,156 @@ class SwissPairingEngineTest {
     }
 
     @Test
+    void lowerAbsoluteColorPreferenceOverridesHigherMildPreference() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.0, Set.of(), 1, 0, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(b, 1700, 1.0, Set.of(), 0, 3, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        PairingPlan.Board board = plan.boards().getFirst();
+        assertEquals(b, board.whitePlayerId());
+        assertEquals(a, board.blackPlayerId());
+    }
+
+    @Test
+    void alternatesColorsWhenHigherPlayedWhiteAndLowerPlayedBlack() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.0, Set.of(), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(b, 1700, 1.0, Set.of(), 1, 1, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        PairingPlan.Board board = plan.boards().getFirst();
+        assertEquals(b, board.whitePlayerId());
+        assertEquals(a, board.blackPlayerId());
+    }
+
+    @Test
+    void playerWithNoGamesDelegatesColorChoiceToOpponent() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.0, Set.of(), 0, 0, false,
+                        PairingCandidate.NONE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(b, 1700, 1.0, Set.of(), 1, 0, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        PairingPlan.Board board = plan.boards().getFirst();
+        assertEquals(a, board.whitePlayerId());
+        assertEquals(b, board.blackPlayerId());
+    }
+
+    @Test
+    void sameLastColorsGiveHigherRankedPreferenceChoice() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.0, Set.of(), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(b, 1700, 1.0, Set.of(), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        PairingPlan.Board board = plan.boards().getFirst();
+        assertEquals(b, board.whitePlayerId());
+        assertEquals(a, board.blackPlayerId());
+    }
+
+    @Test
+    void exchangesWithinSameHalfWhenColorConstraintsPreventFoldPairing() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        UUID d = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 2000, 0.0, Set.of(d), 3, 0, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(b, 1900, 0.0, Set.of(c), 0, 3, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(c, 1800, 0.0, Set.of(b), 3, 0, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(d, 1700, 0.0, Set.of(a), 0, 3, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(2, plan.boards().size());
+        assertNull(plan.byePlayerId());
+        assertPaired(plan, a, b);
+        assertPaired(plan, c, d);
+    }
+
+    @Test
+    void firstRoundAlternatesColorsAcrossBoards() {
+        List<PairingCandidate> candidates = new ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            candidates.add(candidate(UUID.randomUUID(), 2000 - i * 100, 0.0,
+                    Set.of(), 0, 0, false));
+        }
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(3, plan.boards().size());
+        assertEquals(candidates.get(0).playerId(), plan.boards().get(0).whitePlayerId());
+        assertEquals(candidates.get(1).playerId(), plan.boards().get(1).blackPlayerId());
+        assertEquals(candidates.get(2).playerId(), plan.boards().get(2).whitePlayerId());
+    }
+
+    @Test
+    void higherScorePlayerFloatedDownLastRoundStillGetsPaired() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 1800, 1.0, Set.of(), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 1, 0, true, false),
+                candidate(b, 1700, 0.0, Set.of(), 0, 0, false),
+                candidate(c, 1600, 0.0, Set.of(), 0, 0, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(1, plan.boards().size());
+        assertNotNull(plan.byePlayerId());
+        assertPaired(plan, a, b);
+    }
+
+    @Test
+    void sameMildPreferenceCostDoesNotPreventFoldOptimalPairing() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        UUID d = UUID.randomUUID();
+        List<PairingCandidate> candidates = List.of(
+                candidate(a, 2000, 0.0, Set.of(), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(b, 1900, 0.0, Set.of(), 1, 1, false,
+                        PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(c, 1800, 0.0, Set.of(), 1, 1, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false),
+                candidate(d, 1700, 0.0, Set.of(), 1, 1, false,
+                        PairingCandidate.BLACK, PairingCandidate.NONE, 0, 0, false, false));
+
+        PairingPlan plan = engine.generate(candidates);
+
+        assertEquals(2, plan.boards().size());
+        assertNull(plan.byePlayerId());
+        assertPaired(plan, a, c);
+        assertPaired(plan, b, d);
+    }
+
+    @Test
     void handlesExtremeRatingDisparity() {
         UUID a = UUID.randomUUID();
         UUID b = UUID.randomUUID();
