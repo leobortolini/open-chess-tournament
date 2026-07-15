@@ -558,7 +558,7 @@ class SwissPairingEngineTest {
         List<PairingCandidate> candidates = List.of(
                 candidate(a, 1800, 1.0, Set.of(), 0, 0, false,
                         PairingCandidate.NONE, PairingCandidate.NONE, 0, 0, false, false),
-                candidate(b, 1700, 1.0, Set.of(), 1, 0, false,
+                candidate(b, 1700, 1.0, Set.of(), 1, 1, false,
                         PairingCandidate.WHITE, PairingCandidate.NONE, 0, 0, false, false));
 
         PairingPlan plan = engine.generate(candidates);
