@@ -2,6 +2,8 @@ package com.open.chess.tournament.domain.service;
 
 import com.open.chess.tournament.domain.exception.NoPairingPossibleException;
 import com.open.chess.tournament.domain.service.PairingPlan.Board;
+import org.jgrapht.alg.interfaces.MatchingAlgorithm;
+import org.jgrapht.alg.interfaces.MatchingAlgorithm.Matching;
 import org.jgrapht.alg.matching.blossom.v5.KolmogorovWeightedPerfectMatching;
 import org.jgrapht.alg.matching.blossom.v5.ObjectiveSense;
 import org.jgrapht.graph.DefaultWeightedEdge;
@@ -97,8 +99,8 @@ public class SwissPairingEngine {
         List<int[]> pairs = new ArrayList<>();
         UUID byePlayerId = null;
         try {
-            var matching = new KolmogorovWeightedPerfectMatching<>(graph, ObjectiveSense.MINIMIZE)
-                    .getMatching();
+            Matching<Integer, DefaultWeightedEdge> matching = new KolmogorovWeightedPerfectMatching<>(graph, ObjectiveSense.MINIMIZE).getMatching();
+
             for (DefaultWeightedEdge edge : matching.getEdges()) {
                 int a = graph.getEdgeSource(edge);
                 int b = graph.getEdgeTarget(edge);
