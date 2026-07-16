@@ -78,19 +78,19 @@ class JaVaFoComparisonTest {
         assumeTrue(Files.exists(JAVAFO_JAR), "tools/javafo/javafo.jar not present; skipping");
 
         Agreement global = measure(new SwissPairingEngine(), false);
-        Agreement bracket = measure(new BracketSwissPairingEngine(), false);
+        Agreement lite = measure(new LiteSwissPairingEngine(), false);
 
         System.out.printf("%n=== Architecture experiment over %d rounds ===%n", global.rounds);
         System.out.printf("  global matching : %3d/%d identical (%.0f%%), %d color-identical, %d unpairable%n",
                 global.exact, global.rounds, 100.0 * global.exact / global.rounds,
                 global.colorExact, global.failures);
-        System.out.printf("  bracket engine  : %3d/%d identical (%.0f%%), %d color-identical, %d unpairable%n",
-                bracket.exact, bracket.rounds, 100.0 * bracket.exact / bracket.rounds,
-                bracket.colorExact, bracket.failures);
+        System.out.printf("  lite engine  : %3d/%d identical (%.0f%%), %d color-identical, %d unpairable%n",
+                lite.exact, lite.rounds, 100.0 * lite.exact / lite.rounds,
+                lite.colorExact, lite.failures);
 
-        assertEquals(0, bracket.failures,
+        assertEquals(0, lite.failures,
                 "The completion look-ahead must pair every position JaVaFo pairs");
-        assertEquals(0, bracket.firstRoundMismatches,
+        assertEquals(0, lite.firstRoundMismatches,
                 "First-round pairings must match JaVaFo exactly");
     }
 

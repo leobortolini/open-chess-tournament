@@ -34,9 +34,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * forfeits). Each round is exported as a TRF and bbpPairings is asked
  * to pair the same position these engines pair.
  *
- * {@link SwissPairingEngine} shares the weighted-matching architecture
+ * {@link LiteSwissPairingEngine} shares the weighted-matching architecture
  * with bbpPairings, so agreement is expected to be high. The
- * {@link BracketSwissPairingEngine} follows the literal Dutch bracket
+ * {@link SwissPairingEngine} follows the literal Dutch bracket
  * procedure and may diverge on tie-breaking choices.
  *
  * First-round pairings (pure fold with alternating colors) must match
@@ -75,10 +75,10 @@ class BbpPairingsComparisonTest {
     }
 
     @Test
-    void bracketEngineTracksBbpPairingsAcrossSimulatedTournaments() throws Exception {
+    void liteSwissEngineTracksBbpPairingsAcrossSimulatedTournaments() throws Exception {
         assumeTrue(Files.exists(BBP_EXECUTABLE), BBP_EXECUTABLE + " not present; skipping");
 
-        Agreement agreement = measure(new BracketSwissPairingEngine(), true);
+        Agreement agreement = measure(new LiteSwissPairingEngine(), true);
 
         assertEquals(0, agreement.firstRoundMismatches,
                 "First-round pairings must match bbpPairings exactly");
@@ -90,30 +90,24 @@ class BbpPairingsComparisonTest {
                 rate * 100, agreement.exact, agreement.rounds));
     }
 
-    /**
-     * Side-by-side comparison of both engines against bbpPairings.
-     * Since bbpPairings uses weighted matching like
-     * {@link SwissPairingEngine}, the global engine typically agrees more
-     * often; the bracket engine may diverge on tie-breaking choices.
-     */
     @Test
     void bothEnginesComparedAgainstBbpPairings() throws Exception {
         assumeTrue(Files.exists(BBP_EXECUTABLE), BBP_EXECUTABLE + " not present; skipping");
 
         Agreement global = measure(new SwissPairingEngine(), false);
-        Agreement bracket = measure(new BracketSwissPairingEngine(), false);
+        Agreement lite = measure(new LiteSwissPairingEngine(), false);
 
         System.out.printf("%n=== bbpPairings comparison over %d rounds ===%n", global.rounds);
         System.out.printf("  global matching : %3d/%d identical (%.0f%%), %d color-identical, %d unpairable%n",
                 global.exact, global.rounds, 100.0 * global.exact / global.rounds,
                 global.colorExact, global.failures);
-        System.out.printf("  bracket engine  : %3d/%d identical (%.0f%%), %d color-identical, %d unpairable%n",
-                bracket.exact, bracket.rounds, 100.0 * bracket.exact / bracket.rounds,
-                bracket.colorExact, bracket.failures);
+        System.out.printf("  lite engine  : %3d/%d identical (%.0f%%), %d color-identical, %d unpairable%n",
+                lite.exact, lite.rounds, 100.0 * lite.exact / lite.rounds,
+                lite.colorExact, lite.failures);
 
-        assertEquals(0, bracket.failures,
+        assertEquals(0, lite.failures,
                 "The completion look-ahead must pair every position bbpPairings pairs");
-        assertEquals(0, bracket.firstRoundMismatches,
+        assertEquals(0, lite.firstRoundMismatches,
                 "First-round pairings must match bbpPairings exactly");
     }
 
