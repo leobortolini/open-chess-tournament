@@ -8,12 +8,7 @@ import org.jgrapht.alg.matching.blossom.v5.ObjectiveSense;
 import org.jgrapht.graph.DefaultWeightedEdge;
 import org.jgrapht.graph.SimpleWeightedGraph;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 /**
  * Swiss-system pairing engine implementing the FIDE (Dutch) criteria:
@@ -93,41 +88,45 @@ public class SwissPairingEngine implements PairingEngine {
         if (candidates.size() < 2) {
             throw new NoPairingPossibleException("At least two active players are required to pair a round");
         }
-        //TODO: Check whether we need to sort using the tournament's tie-breaking criteria instead of rating, after sorting by score.
-        //      If so, we will need to make some changes to retrieve this information, which is not accessible (so far) in PairingCandidate.
-        //      I think we can just add the new attribute, but I'm not sure right now
         List<PairingCandidate> ranked = candidates.stream()
                 .sorted(ranking())
                 .toList();
         boolean oddField = ranked.size() % 2 != 0;
         List<List<PairingCandidate>> groups = scoreGroups(ranked);
         double byeScore = oddField ? pinByeScore(ranked, groups) : Double.NEGATIVE_INFINITY;
-
         List<PairingCandidate[]> pairs = new ArrayList<>();
         List<PairingCandidate> carried = new ArrayList<>();
         UUID byePlayerId = null;
+
         for (int g = 0; g < groups.size(); g++) {
             List<PairingCandidate> bracket = new ArrayList<>(carried);
+
             bracket.addAll(groups.get(g));
             bracket.sort(ranking());
+
             List<PairingCandidate> next = g + 1 < groups.size() ? groups.get(g + 1) : List.of();
             List<PairingCandidate> below = new ArrayList<>();
+
             for (int h = g + 2; h < groups.size(); h++) {
                 below.addAll(groups.get(h));
             }
-            BracketResult result = fixBracket(bracket, next, below,
-                    oddField && byePlayerId == null, byeScore);
+
+            BracketResult result = fixBracket(bracket, next, below, oddField && byePlayerId == null, byeScore);
+
             pairs.addAll(result.pairs());
             carried = result.floaters();
+
             if (result.byePlayerId() != null) {
                 byePlayerId = result.byePlayerId();
             }
         }
 
         List<Board> boards = new ArrayList<>(pairs.size());
+
         for (int i = 0; i < pairs.size(); i++) {
             boards.add(assignColors(pairs.get(i)[0], pairs.get(i)[1], i));
         }
+
         return new PairingPlan(boards, byePlayerId);
     }
 
@@ -163,9 +162,11 @@ public class SwissPairingEngine implements PairingEngine {
     private double pinByeScore(List<PairingCandidate> ranked, List<List<PairingCandidate>> groups) {
         int size = ranked.size();
         double result = tryPinByeScore(ranked, groups, size, true);
+
         if (Double.isNaN(result)) {
             result = tryPinByeScore(ranked, groups, size, false);
         }
+
         return result;
     }
 
@@ -202,8 +203,8 @@ public class SwissPairingEngine implements PairingEngine {
             }
         }
         try {
-            Matching<Integer, DefaultWeightedEdge> matching =
-                    new KolmogorovWeightedPerfectMatching<>(graph, ObjectiveSense.MINIMIZE).getMatching();
+            Matching<Integer, DefaultWeightedEdge> matching = new KolmogorovWeightedPerfectMatching<>(graph, ObjectiveSense.MINIMIZE).getMatching();
+
             for (DefaultWeightedEdge edge : matching.getEdges()) {
                 int low = Math.min(graph.getEdgeSource(edge), graph.getEdgeTarget(edge));
                 int high = Math.max(graph.getEdgeSource(edge), graph.getEdgeTarget(edge));
@@ -211,6 +212,7 @@ public class SwissPairingEngine implements PairingEngine {
                     return ranked.get(low).score();
                 }
             }
+
             throw new NoPairingPossibleException("Unable to generate a round without rematches or a second bye");
         } catch (IllegalArgumentException noPerfectMatching) {
             if (hardConstraint) {
@@ -236,45 +238,51 @@ public class SwissPairingEngine implements PairingEngine {
         int bracketSize = bracket.size();
         int nextEnd = bracketSize + next.size();
         List<PairingCandidate> remaining = new ArrayList<>(bracket);
+
         remaining.addAll(next);
         remaining.addAll(below);
-        int total = remaining.size();
-        int byeVertex = total;
+        int byeVertex = remaining.size();
         double residentScore = bracket.getLast().score();
+
         // C.2/C.9: among the players on the pinned bye level, the one with
         // the most played games takes the bye, so pairing the others earns
         // a reward and the greedy leftover is the most-played one.
-        int maxPlayedAtByeLevel = 0;
-        java.util.Map<Integer, Integer> unplayedGameRanks = new java.util.HashMap<>();
+        Map<Integer, Integer> unplayedGameRanks = new HashMap<>();
+
         if (byeOpen) {
-            java.util.List<Integer> playedCounts = new java.util.ArrayList<>();
+            List<Integer> playedCounts = new ArrayList<>();
+
             for (PairingCandidate candidate : remaining) {
                 if (candidate.score() == byeScore) {
                     int played = candidate.whiteGames() + candidate.blackGames();
+
                     if (!playedCounts.contains(played)) {
                         playedCounts.add(played);
                     }
                 }
             }
             playedCounts.sort(java.util.Comparator.reverseOrder());
+
             for (int rank = 0; rank < playedCounts.size(); rank++) {
                 unplayedGameRanks.put(playedCounts.get(rank), rank);
             }
         }
 
-        SimpleWeightedGraph<Integer, DefaultWeightedEdge> graph =
-                new SimpleWeightedGraph<>(DefaultWeightedEdge.class);
-        for (int v = 0; v < total; v++) {
+        SimpleWeightedGraph<Integer, DefaultWeightedEdge> graph = new SimpleWeightedGraph<>(DefaultWeightedEdge.class);
+        for (int v = 0; v < byeVertex; v++) {
             graph.addVertex(v);
         }
-        for (int i = 0; i < total; i++) {
-            for (int j = i + 1; j < total; j++) {
+
+        for (int i = 0; i < byeVertex; i++) {
+            for (int j = i + 1; j < byeVertex; j++) {
                 PairingCandidate higher = remaining.get(i);
                 PairingCandidate lower = remaining.get(j);
+
                 if (higher.hasPlayed(lower.playerId())) {
                     continue;
                 }
                 double reward = 0.0;
+
                 if (!bothAbsoluteSamePreference(higher, lower)) {
                     if (j < bracketSize) {
                         reward = bracketPairReward(higher, lower, residentScore);
@@ -295,7 +303,7 @@ public class SwissPairingEngine implements PairingEngine {
         }
         if (byeOpen) {
             graph.addVertex(byeVertex);
-            for (int i = 0; i < total; i++) {
+            for (int i = 0; i < byeVertex; i++) {
                 if (remaining.get(i).eligibleForBye() && remaining.get(i).score() <= byeScore + 0.01) {
                     graph.setEdgeWeight(graph.addEdge(i, byeVertex), 0.0);
                 }
@@ -477,8 +485,10 @@ public class SwissPairingEngine implements PairingEngine {
         if (candidate.score() != byeScore) {
             return 0.0;
         }
+
         int played = candidate.whiteGames() + candidate.blackGames();
         Integer rank = unplayedGameRanks.get(played);
+
         return rank != null ? rank * REWARD_BYE_LEVEL_FEWER_PLAYED : 0.0;
     }
 
@@ -527,13 +537,13 @@ public class SwissPairingEngine implements PairingEngine {
                     memberPairs++;
                 }
             }
-            int s2From = Math.min(Math.max(memberPairs - 1, 0), unfixed.size());
+            int s2From = Math.clamp(memberPairs - 1, 0, unfixed.size());
             order.addAll(unfixed.subList(s2From, unfixed.size()));
             // S1 exchanges (Art. 4.3): the lowest S1 member leaves first
             // and becomes the top of the reordered S2, so exchange
             // candidates are tried from the bottom of S1 upward.
             List<Integer> exchanges = new ArrayList<>(unfixed.subList(0, s2From));
-            java.util.Collections.reverse(exchanges);
+            Collections.reverse(exchanges);
             order.addAll(exchanges);
         }
         return order;
@@ -588,20 +598,19 @@ public class SwissPairingEngine implements PairingEngine {
 
     private Board assignColors(PairingCandidate higher, PairingCandidate lower, int boardIndex) {
         int neutral = choosePlayerNeutralColor(higher, lower);
+        Board board1 = new Board(higher.playerId(), lower.playerId());
+
         if (neutral == PairingCandidate.WHITE) {
-            return new Board(higher.playerId(), lower.playerId());
+            return board1;
         }
+        Board board2 = new Board(lower.playerId(), higher.playerId());
         if (neutral == PairingCandidate.BLACK) {
-            return new Board(lower.playerId(), higher.playerId());
+            return board2;
         }
         if (higher.colorPreference() != PairingCandidate.NONE) {
-            return higher.colorPreference() == PairingCandidate.WHITE
-                    ? new Board(higher.playerId(), lower.playerId())
-                    : new Board(lower.playerId(), higher.playerId());
+            return higher.colorPreference() == PairingCandidate.WHITE ? board1 : board2;
         }
-        return boardIndex % 2 == 0
-                ? new Board(higher.playerId(), lower.playerId())
-                : new Board(lower.playerId(), higher.playerId());
+        return boardIndex % 2 == 0 ? board1 : board2;
     }
 
     /**
