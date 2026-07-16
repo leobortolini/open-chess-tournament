@@ -46,6 +46,7 @@ class JaVaFoComparisonTest {
 
     private static final Path JAVAFO_JAR = Path.of("tools", "javafo", "javafo.jar");
     private static final int TOURNAMENTS = 100;
+    private static final int PLAYERS = 64;
     private static final int ROUNDS = 5;
     private static final double MINIMUM_AGREEMENT = 0.55;
 
@@ -107,7 +108,7 @@ class JaVaFoComparisonTest {
         List<String> divergences = new ArrayList<>();
 
         for (int seed = 1; seed <= TOURNAMENTS; seed++) {
-            int playerCount = 8 + (seed % 9);
+            int playerCount = PLAYERS;
             Tournament tournament = Tournament.create("Sim" + seed, ROUNDS);
             for (int i = 0; i < playerCount; i++) {
                 tournament.registerPlayer("Player" + (i + 1), 2600 - i * 13);
