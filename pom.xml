@@ -28,6 +28,7 @@
 	</scm>
 	<properties>
 		<java.version>25</java.version>
+		<excludedTestGroups>external</excludedTestGroups>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -88,7 +89,25 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<excludedGroups>${excludedTestGroups}</excludedGroups>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<!-- Runs the full suite including the "external" tests that spawn
+		     JaVaFo and bbpPairings: mvn test -Pexternal -->
+		<profile>
+			<id>external</id>
+			<properties>
+				<excludedTestGroups></excludedTestGroups>
+			</properties>
+		</profile>
+	</profiles>
 
 </project>

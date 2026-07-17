@@ -2,7 +2,6 @@ package com.open.chess.tournament.domain.service;
 
 import com.open.chess.tournament.domain.exception.NoPairingPossibleException;
 import com.open.chess.tournament.domain.service.PairingPlan.Board;
-import org.jgrapht.alg.interfaces.MatchingAlgorithm;
 import org.jgrapht.alg.interfaces.MatchingAlgorithm.Matching;
 import org.jgrapht.alg.matching.blossom.v5.KolmogorovWeightedPerfectMatching;
 import org.jgrapht.alg.matching.blossom.v5.ObjectiveSense;
@@ -30,14 +29,19 @@ import java.util.UUID;
  *             worse than several small ones); the bye is treated as a game
  *             against a virtual opponent on zero points.
  *   3. C.8  — minimize pairs where both players are due the same color.
- *   4. C.12/C.13 — avoid floating a player in the same direction (or
- *             giving the bye to a downfloater) two rounds in a row.
+ *   4. C.12/C.13 — avoid floating a player in the same direction two
+ *             rounds in a row, or with one round in between (the bye
+ *             counts as a downfloat).
  *   5. D    — inside a score group, pair the top half (S1) against the
- *             bottom half (S2) in fold order (1 vs n/2+1, ...), treating
- *             same-half pairs as exchanges that rank below any S1-S2
- *             transposition; floaters meet the top of the receiving
- *             group, and the bye goes to the lowest-ranked eligible
- *             player.
+ *             bottom half (S2). The lexicographic transposition scan gives
+ *             each board, from the top down, the lowest-indexed S2 member
+ *             still available; minimizing the S2 index weighted by a
+ *             decreasing board priority reproduces that scan. Same-half
+ *             pairs are exchanges that rank below any transposition and
+ *             move the member closest to the S1/S2 boundary; floaters meet
+ *             the top of the receiving group and come from the bottom of
+ *             the origin group, and the bye goes to the lowest-ranked
+ *             eligible player.
  * Weights must stay below the Blossom V implementation's 1e10 feasibility
  * threshold, which bounds how far apart the tiers can sit: the ordering
  * is strictly lexicographic for fields of up to 64 players, and remains a
@@ -51,10 +55,17 @@ public class LiteSwissPairingEngine implements PairingEngine {
     private static final double COST_SAME_COLOR_PREFERENCE = 1e5;
     private static final double COST_BOTH_STRONG_PREFERENCE = 5e4;
     private static final double COST_FLOAT_REPEAT = 1200;
+    private static final double COST_FLOAT_REPEAT_TWO_AGO = 800;
+    private static final double COST_UPFLOAT_POSITION_UNIT = 60;
     private static final double COST_HALF_EXCHANGE = 20;
+    private static final double COST_DOWNFLOAT_POSITION_UNIT = 5;
+    private static final double COST_EXCHANGE_DEPTH_UNIT = 0.5;
+    private static final double COST_FOLD_UNIT = 0.0004;
     private static final int SCORE_DIFF_CAP = 36;
-    private static final int FOLD_DEVIATION_CAP = 10;
+    private static final int FOLD_PRIORITY_SPAN = 33;
     private static final int UPFLOAT_POSITION_CAP = 10;
+    private static final int DOWNFLOAT_POSITION_CAP = 12;
+    private static final int EXCHANGE_DEPTH_CAP = 20;
 
     @Override
     public PairingPlan generate(List<PairingCandidate> candidates) {
@@ -161,8 +172,22 @@ public class LiteSwissPairingEngine implements PairingEngine {
             if (lower.floatedUpLastRound()) {
                 cost += COST_FLOAT_REPEAT;
             }
-            // The floater should meet the top of the receiving group.
-            cost += Math.min(j - groupStart[j], UPFLOAT_POSITION_CAP);
+            // C.13: also avoid repeating a float in the same direction with
+            // one round in between.
+            if (higher.floatedDownTwoRoundsAgo()) {
+                cost += COST_FLOAT_REPEAT_TWO_AGO;
+            }
+            if (lower.floatedUpTwoRoundsAgo()) {
+                cost += COST_FLOAT_REPEAT_TWO_AGO;
+            }
+            // The floater should meet the top of the receiving group, and in
+            // the Dutch procedure that choice is made before the residents
+            // fold, so it sits on its own tier above every in-group cost.
+            cost += COST_UPFLOAT_POSITION_UNIT * Math.min(j - groupStart[j], UPFLOAT_POSITION_CAP);
+            // The player left over by the fold — and hence floating — should
+            // be the lowest-ranked member of the origin group.
+            int posFromBottom = groupStart[i] + groupSize(ranked, groupStart, i) - 1 - i;
+            cost += COST_DOWNFLOAT_POSITION_UNIT * Math.min(posFromBottom, DOWNFLOAT_POSITION_CAP);
         } else {
             // Inside a score group the Dutch rules pair the top half (S1)
             // against the bottom half (S2); a pair within the same half is
@@ -171,9 +196,24 @@ public class LiteSwissPairingEngine implements PairingEngine {
             int posHigher = i - groupStart[i];
             int posLower = j - groupStart[j];
             if (posLower < half || posHigher >= half) {
-                cost += COST_HALF_EXCHANGE;
+                // Art. 4.3 orders exchanges from the S1/S2 boundary outward.
+                // In a same-half pair the member conceptually moved across the
+                // boundary is the one sitting closest to it, and the exchange
+                // should move the closest member available.
+                int movedDepth = posHigher >= half
+                        ? posHigher - half
+                        : half - 1 - posLower;
+                cost += COST_HALF_EXCHANGE + COST_EXCHANGE_DEPTH_UNIT * Math.min(movedDepth, EXCHANGE_DEPTH_CAP);
             } else {
-                cost += Math.min(Math.abs((posLower - half) - posHigher), FOLD_DEVIATION_CAP);
+                // D.1: transpositions are tried in lexicographic order, which
+                // amounts to giving each board, from the top down, the
+                // lowest-indexed S2 member still available. Minimizing the S2
+                // index weighted by a decreasing board priority reproduces
+                // that greedy scan (rearrangement inequality: an unconstrained
+                // optimum assigns ascending S2 indexes to descending boards).
+                int s2Index = posLower - half;
+                int priority = (FOLD_PRIORITY_SPAN - posHigher) * (FOLD_PRIORITY_SPAN - posHigher);
+                cost += COST_FOLD_UNIT * s2Index * priority;
             }
         }
         return cost;
@@ -182,7 +222,7 @@ public class LiteSwissPairingEngine implements PairingEngine {
     /**
      * The bye is a downfloat to a virtual opponent on zero points: it costs
      * the player's own score, avoids players who floated down in the
-     * previous round, and prefers the lowest-ranked eligible player.
+     * previous rounds, and prefers the lowest-ranked eligible player.
      */
     private double byeCost(List<PairingCandidate> ranked, int i) {
         PairingCandidate candidate = ranked.get(i);
@@ -190,6 +230,9 @@ public class LiteSwissPairingEngine implements PairingEngine {
         double cost = COST_SCORE_DIFF_UNIT * Math.min(doubledScore * doubledScore, SCORE_DIFF_CAP);
         if (candidate.floatedDownLastRound()) {
             cost += COST_FLOAT_REPEAT;
+        }
+        if (candidate.floatedDownTwoRoundsAgo()) {
+            cost += COST_FLOAT_REPEAT_TWO_AGO;
         }
         cost += ranked.size() - 1 - i;
         return cost;

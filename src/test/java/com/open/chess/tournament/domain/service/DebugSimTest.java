@@ -39,7 +39,7 @@ class DebugSimTest {
         int seed = Integer.getInteger("debug.seed", 1);
         int targetRound = Integer.getInteger("debug.round", 4);
 
-        int playerCount = 8 + (seed % 9);
+        int playerCount = Integer.getInteger("debug.players", 64);
         Tournament tournament = Tournament.create("Sim" + seed, ROUNDS);
         for (int i = 0; i < playerCount; i++) {
             tournament.registerPlayer("Player" + (i + 1), 2600 - i * 13);
@@ -47,7 +47,9 @@ class DebugSimTest {
         tournament.start();
         Map<UUID, Integer> ranks = startRanks(tournament);
         Random random = new Random(seed * 1000L);
-        PairingEngine engine = new SwissPairingEngine();
+        PairingEngine engine = "swiss".equals(System.getProperty("debug.engine"))
+                ? new SwissPairingEngine()
+                : new LiteSwissPairingEngine();
 
         for (int r = 1; r <= targetRound; r++) {
             String trf = exporter.export(tournament);

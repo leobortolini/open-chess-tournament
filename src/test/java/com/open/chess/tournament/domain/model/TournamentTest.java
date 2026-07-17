@@ -351,17 +351,26 @@ class TournamentTest {
     }
 
     @Test
-    void forfeitedGameStillCountsAsHavingMet() {
+    void forfeitedGameDoesNotCountAsHavingMet() {
+        // FIDE C.1 counts only games actually played, so a pairing decided
+        // by forfeit may be repeated (the same rule bbpPairings and JaVaFo
+        // apply).
         Tournament tournament = Tournament.create("Forfeit Meeting", 2);
-        tournament.registerPlayer("A", 2000);
-        tournament.registerPlayer("B", 1900);
+        Player a = tournament.registerPlayer("A", 2000);
+        Player b = tournament.registerPlayer("B", 1900);
         tournament.start();
 
-        Round round = tournament.generateNextRound(engine).orElseThrow();
-        tournament.reportResult(round.getPairings().getFirst().getId(),
+        Round round1 = tournament.generateNextRound(engine).orElseThrow();
+        tournament.reportResult(round1.getPairings().getFirst().getId(),
                 GameResult.WHITE_WINS_FORFEIT);
 
-        assertTrue(tournament.generateNextRound(engine).isEmpty());
+        Round round2 = tournament.generateNextRound(engine).orElseThrow();
+        Pairing rematch = round2.getPairings().getFirst();
+        assertFalse(rematch.isBye());
+        assertEquals(Set.of(a.getId(), b.getId()),
+                Set.of(rematch.getWhitePlayerId(), rematch.getBlackPlayerId()));
+
+        tournament.reportResult(rematch.getId(), GameResult.WHITE_WINS);
         assertEquals(TournamentStatus.FINISHED, tournament.getStatus());
     }
 
@@ -472,8 +481,6 @@ class TournamentTest {
                 assertTrue(seen.add(black));
                 assertFalse(met.computeIfAbsent(white, k -> new HashSet<>()).contains(black),
                         "Rematch in round " + r);
-                met.get(white).add(black);
-                met.computeIfAbsent(black, k -> new HashSet<>()).add(white);
 
                 int roll = random.nextInt(100);
                 GameResult result;
@@ -490,6 +497,10 @@ class TournamentTest {
                 }
                 tournament.reportResult(pairing.getId(), result);
                 if (result.isPlayedGame()) {
+                    // FIDE C.1: only games actually played count as having
+                    // met; a pairing decided by forfeit may be repeated.
+                    met.get(white).add(black);
+                    met.computeIfAbsent(black, k -> new HashSet<>()).add(white);
                     colorHistory.computeIfAbsent(white, k -> new ArrayList<>()).add(1);
                     colorHistory.computeIfAbsent(black, k -> new ArrayList<>()).add(-1);
                 }

@@ -5,6 +5,7 @@ import com.open.chess.tournament.domain.model.Pairing;
 import com.open.chess.tournament.domain.model.Player;
 import com.open.chess.tournament.domain.model.Round;
 import com.open.chess.tournament.domain.model.Tournament;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -41,7 +42,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
  * Requires tools/javafo/javafo.jar (see tools/javafo/README.md); the test
  * is skipped when the jar is not present.
+ *
+ * <p>Tagged {@code external} because it spawns JaVaFo hundreds of times;
+ * excluded from the default build and run with {@code mvn test -Pexternal}.
  */
+@Tag("external")
 class JaVaFoComparisonTest {
 
     private static final Path JAVAFO_JAR = Path.of("tools", "javafo", "javafo.jar");
