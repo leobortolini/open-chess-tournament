@@ -2,9 +2,10 @@ package com.open.chess.tournament.domain.service;
 
 import com.open.chess.tournament.domain.exception.NoPairingPossibleException;
 import com.open.chess.tournament.domain.service.PairingPlan.Board;
+import com.open.chess.tournament.domain.service.matching.BlossomVMatchingSolver;
+import com.open.chess.tournament.domain.service.matching.MatchingObjective;
+import com.open.chess.tournament.domain.service.matching.PerfectMatchingSolver;
 import org.jgrapht.alg.interfaces.MatchingAlgorithm.Matching;
-import org.jgrapht.alg.matching.blossom.v5.KolmogorovWeightedPerfectMatching;
-import org.jgrapht.alg.matching.blossom.v5.ObjectiveSense;
 import org.jgrapht.graph.DefaultWeightedEdge;
 import org.jgrapht.graph.SimpleWeightedGraph;
 
@@ -67,6 +68,16 @@ public class LiteSwissPairingEngine implements PairingEngine {
     private static final int DOWNFLOAT_POSITION_CAP = 12;
     private static final int EXCHANGE_DEPTH_CAP = 20;
 
+    private final PerfectMatchingSolver solver;
+
+    public LiteSwissPairingEngine() {
+        this(new BlossomVMatchingSolver());
+    }
+
+    public LiteSwissPairingEngine(PerfectMatchingSolver solver) {
+        this.solver = solver;
+    }
+
     @Override
     public PairingPlan generate(List<PairingCandidate> candidates) {
         if (candidates.size() < 2) {
@@ -111,7 +122,7 @@ public class LiteSwissPairingEngine implements PairingEngine {
         List<int[]> pairs = new ArrayList<>();
         UUID byePlayerId = null;
         try {
-            Matching<Integer, DefaultWeightedEdge> matching = new KolmogorovWeightedPerfectMatching<>(graph, ObjectiveSense.MINIMIZE).getMatching();
+            Matching<Integer, DefaultWeightedEdge> matching = solver.solve(graph, MatchingObjective.MINIMIZE);
 
             for (DefaultWeightedEdge edge : matching.getEdges()) {
                 int a = graph.getEdgeSource(edge);
