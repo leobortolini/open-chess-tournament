@@ -2,9 +2,10 @@ package com.open.chess.tournament.domain.service;
 
 import com.open.chess.tournament.domain.exception.NoPairingPossibleException;
 import com.open.chess.tournament.domain.service.PairingPlan.Board;
+import com.open.chess.tournament.domain.service.matching.BlossomVMatchingSolver;
+import com.open.chess.tournament.domain.service.matching.MatchingObjective;
+import com.open.chess.tournament.domain.service.matching.PerfectMatchingSolver;
 import org.jgrapht.alg.interfaces.MatchingAlgorithm.Matching;
-import org.jgrapht.alg.matching.blossom.v5.KolmogorovWeightedPerfectMatching;
-import org.jgrapht.alg.matching.blossom.v5.ObjectiveSense;
 import org.jgrapht.graph.DefaultWeightedEdge;
 import org.jgrapht.graph.SimpleWeightedGraph;
 
@@ -82,6 +83,16 @@ public class SwissPairingEngine implements PairingEngine {
     // Every reward is an integer, so optimal weights are exact in double
     // arithmetic; the tolerance only guards the comparison.
     private static final double WEIGHT_TOLERANCE = 1e-3;
+
+    private final PerfectMatchingSolver solver;
+
+    public SwissPairingEngine() {
+        this(new BlossomVMatchingSolver());
+    }
+
+    public SwissPairingEngine(PerfectMatchingSolver solver) {
+        this.solver = solver;
+    }
 
     @Override
     public PairingPlan generate(List<PairingCandidate> candidates) {
@@ -203,7 +214,7 @@ public class SwissPairingEngine implements PairingEngine {
             }
         }
         try {
-            Matching<Integer, DefaultWeightedEdge> matching = new KolmogorovWeightedPerfectMatching<>(graph, ObjectiveSense.MINIMIZE).getMatching();
+            Matching<Integer, DefaultWeightedEdge> matching = solver.solve(graph, MatchingObjective.MINIMIZE);
 
             for (DefaultWeightedEdge edge : matching.getEdges()) {
                 int low = Math.min(graph.getEdgeSource(edge), graph.getEdgeTarget(edge));
@@ -582,8 +593,7 @@ public class SwissPairingEngine implements PairingEngine {
             }
         }
         try {
-            Matching<Integer, DefaultWeightedEdge> matching =
-                    new KolmogorovWeightedPerfectMatching<>(subgraph, ObjectiveSense.MAXIMIZE).getMatching();
+            Matching<Integer, DefaultWeightedEdge> matching = solver.solve(subgraph, MatchingObjective.MAXIMIZE);
             List<int[]> pairs = new ArrayList<>();
             for (DefaultWeightedEdge edge : matching.getEdges()) {
                 int low = Math.min(subgraph.getEdgeSource(edge), subgraph.getEdgeTarget(edge));
